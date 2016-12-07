@@ -13,6 +13,7 @@
    exometer_cast/2,
    exometer_call/3,
    exometer_report/5,
+   exometer_report_bulk/3,
    exometer_subscribe/5,
    exometer_unsubscribe/4,
    exometer_newentry/2,
@@ -71,11 +72,30 @@ exometer_report(Metric, DataPoint, Extra, Value, #state{db=Db, sample_ids=SIds}=
     io:fwrite(standard_error, "report: ~p~n", [{self(), Metric, DataPoint, Extra, Value}]),
 
     {ok, Counter} = dict:find(Metric, SIds),
-
     insert(Metric, DataPoint, Value, Counter+1, Db),
     SIds1 = dict:update_counter(Metric, 1, SIds),
 
     {ok, State#state{sample_ids=SIds1}}.
+
+exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
+    io:fwrite(standard_error, "report_bulk: ~p~n", [{self(), Found, Extra}]),
+    
+    State1 = lists:foldl(fun({Metric, Values}, #state{sample_ids=Ids}=S) -> 
+        {ok, Counter} = dict:find(Metric, Ids),
+
+        DataPoint = [K || {K,_V} <- Values],
+        Value = [V || {_K, V} <- Values],
+
+        io:fwrite(standard_error, "report_bulk: values ~p~n", [{DataPoint, Value}]),
+
+        insert(Metric, DataPoint, Value, Counter+1, Db),
+        Ids1 = dict:update_counter(Metric, 1, Ids),
+
+        S#state{sample_ids=Ids1}
+    end, State, Found),
+
+    {ok, State1}.
+
     
 -spec exometer_subscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:interval(), exometer_report:extra(), state()) -> callback_result().
 exometer_subscribe(Metric, DataPoint, Interval, SubscribeOpts,  #state{db=Db, sample_ids=SIds}=State) ->
@@ -124,12 +144,14 @@ init_database(DbArg) ->
     ensure_entry_table(Db),
     Db.
 
-insert(Name, DataPoint, Value,Counter, Db) when is_atom(DataPoint) ->
+insert(Name, DataPoint, Value, Counter, Db) when is_atom(DataPoint) ->
     insert(Name, [DataPoint], [Value], Counter, Db);
 insert(Name, DataPoints, Values, Counter, Db) ->
     TableName = table_name(Name),
     Values1 = [Counter, unix_time() | Values],
-    esqlite3:q(<<"insert into ", TableName/binary, " (sample, time, value) values (?, ?, ?)">>, Values1, Db).
+    QuestionMarks = bjoin([ <<$?>> || _V <- Values1]),
+    io:fwrite(standard_error, "insert: ~p, ~p, ~p~n", [DataPoints, QuestionMarks, Values1]),
+    esqlite3:q(<<"insert into ", TableName/binary, " (sample, time, value) values (", QuestionMarks/binary, ")">>, Values1, Db).
 
 ensure_dp_table(Name, DpInfo, Db) when is_atom(DpInfo) -> ensure_dp_table(Name, [DpInfo], Db);
 ensure_dp_table(Name, DpInfo, Db) ->
@@ -161,7 +183,7 @@ ensure_entry_table(Db) ->
 create_dp_tables(Name, DpInfo, Db) ->
     TableName = table_name(Name),
     Defs = [<<"sample double PRIMARY KEY NOT NULL">>, <<"time double NOT NULL">> | column_defs(DpInfo)],
-    SqlDef = bjoin(Defs, <<$,>>),
+    SqlDef = bjoin(Defs),
     esqlite3:q(<<"CREATE TABLE ", TableName/binary, $(, SqlDef/binary,  $)>>, [], Db).
 
 column_defs(DpInfo) -> column_defs(DpInfo, []).
@@ -187,6 +209,8 @@ table_name([H|T], <<>>) ->
 table_name([H|T], Acc) ->
     B = erlang:atom_to_binary(H, utf8),
     table_name(T, <<Acc/binary, $$, B/binary>>).
+
+bjoin(List) -> bjoin(List, <<$,>>).
 
 bjoin(List, Separator) -> bjoin(List, Separator, <<>>).
 

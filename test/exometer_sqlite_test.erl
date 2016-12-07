@@ -10,7 +10,8 @@
 do_test() ->
      Subscribers =  [ 
         {reporters, [ {exometer_report_sqlite, [
-                {db_arg, "test.db"}
+                {db_arg, "test.db"},
+                {report_bulk, true}
             ]}
         ]}],
 
@@ -31,8 +32,8 @@ do_test() ->
 
     timer:sleep(100),
 
-    ok = exometer_report:subscribe(exometer_report_sqlite, [metric, counter], [value], 200, [], true),
-    ok = exometer_report:subscribe(exometer_report_sqlite, [metric, histogram], [max, min], 230, [], true),
+    ok = exometer_report:subscribe(exometer_report_sqlite, [metric, counter], value, 200, [], true),
+    ok = exometer_report:subscribe(exometer_report_sqlite, [metric, histogram], [min, max], 230, [], true),
 
     timer:sleep(100),
     exometer:update([metric, counter], 13),
