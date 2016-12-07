@@ -156,7 +156,7 @@ insert(Name, DataPoints, Values, Counter, Db) ->
 ensure_dp_table(Name, DpInfo, Db) when is_atom(DpInfo) -> ensure_dp_table(Name, [DpInfo], Db);
 ensure_dp_table(Name, DpInfo, Db) ->
     TableName = table_name(Name),
-    case table_exists(TableName, Db) of
+    case esqlite3_utils:table_exists(TableName, Db) of
         true -> 
             R = esqlite3:q(<<"select sample from ", TableName/binary,  " order by sample desc limit 1">>, Db),
             case R of
@@ -168,14 +168,8 @@ ensure_dp_table(Name, DpInfo, Db) ->
             0
     end.
 
-table_exists(TableName, Db) ->
-    case esqlite3:q("SELECT name FROM sqlite_master WHERE type='table' AND name=$1", [TableName], Db) of
-        [{_BinTableName}] -> true;
-        [] -> false
-    end.
-   
 ensure_entry_table(Db) ->
-    case table_exists(entry, Db) of
+    case esqlite3_utils:table_exists(entry, Db) of
         true -> ok;
         false -> create_entry_table(Db)
     end.
@@ -233,18 +227,6 @@ unix_time() ->
 %%  
 %%
 
-% heuristics for the number of seconds in a period.
-seconds(hour) -> 3600;
-seconds(day) -> seconds(hour) * 24;
-seconds(week) -> seconds(day) * 7;
-seconds(month) -> seconds(day) * 30;
-seconds(month3) -> seconds(month) * 3;
-seconds(month6) -> seconds(month) * 6;
-seconds(year) -> seconds(day) * 365.
-
-interval(NumberOfSamples, Period) -> 
-    seconds(Period) / NumberOfSamples.
-
 %%
 %% Tests
 %%
@@ -252,27 +234,8 @@ interval(NumberOfSamples, Period) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-interval_test() ->
-    % 25920, 52560,
-    ?assertEqual(6.0, interval(600, hour)),
-    ?assertEqual(144.0, interval(600, day)),
-    ?assertEqual(1008.0, interval(600, week)),
-    ?assertEqual(4320.0, interval(600, month)),
-    ?assertEqual(12960.0, interval(600, month3)),
-    ?assertEqual(25920.0, interval(600, month6)),
-    ?assertEqual(52560.0, interval(600, year)),
-    ok.
-
 init_database_test() ->
     Db = init_database(":memory:"),
-    ok.
-
-table_exists_test() ->
-    {ok, Db} = esqlite3:open(":memory:"),
-    ?assertEqual(false, table_exists(foo, Db)),
-
-    esqlite3:q("create table foo(\"a\" text)", Db),
-    ?assertEqual(true, table_exists(foo, Db)),
     ok.
 
 table_name_test() ->
