@@ -31,8 +31,7 @@ transaction(Fun, Db) ->
             Result ->
                 case esqlite3:q("COMMIT", Db) of
                     [] -> Result;
-                    {error, _} = ErrorCommit -> 
-                        throw(ErrorCommit)
+                    {error, _} = ErrorCommit -> throw(ErrorCommit)
                 end
         end
     catch 

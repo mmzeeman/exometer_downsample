@@ -17,6 +17,7 @@
 -record(bucket, {
     name, 
     datapoints,
+    period,
     interval,
 
     insert_query, % the query needed to insert a sample.
@@ -29,13 +30,19 @@
     samples  % The last couple of samples needed to calculate a sample for the next bucket
 }).
 
--record(sample, {
-    sample_id,
-    time,
-    next_time,
+init_metric_store(Name, DataPoints, Db) ->
+    Periods = [hour, day, week, month, month3, month6, year],
 
-    data 
-}).
+    Bucket =  lists:foldr(fun(Period, B) -> 
+        New = new(Name, DataPoints, Period),
+        case B of
+            undefined -> New;
+            _ -> set_next_bucket(New, B)
+        end
+    end, undefined, Periods),
+
+    load_history(Bucket, Db).
+
 
 %% Create a new bucket.
 new(Name, DataPoints, PeriodName) ->
@@ -47,7 +54,7 @@ new(Name, DataPoints, PeriodName, NumberOfSamples) ->
     TableName = table_name(Name, PeriodName),
     %HistoryQ = <<"select * from ",  Table/binary, " order by sample desc limit ", NoSamples/binary>>,
 
-    #bucket{name=Name, datapoints=DataPoints, interval=Interval}.
+    #bucket{name=Name, datapoints=DataPoints, period=PeriodName, interval=Interval}.
 
 
 %% Attach a bucket to this bucket.
@@ -59,20 +66,20 @@ set_next_bucket(#bucket{next_bucket=undefined}=Bucket, #bucket{}=NextBucket) ->
     Bucket#bucket{next_bucket = NextBucket}.
 
 %% Load historic samples from the specified database
-load_history(#bucket{next_bucket=undefined}=Bucket, _Db) -> Bucket;
-load_history(#bucket{next_bucket=NextBucket, interval=Interval}=Bucket, Db) ->
+load_history(#bucket{next_bucket=undefined, name=Name, period=Period, datapoints=DataPoints}=Bucket, Db) -> 
+    ok = ensure_table(Period, Name, DataPoints, Db),
+    Bucket;
+load_history(#bucket{next_bucket=NextBucket, name=Name, period=Period, datapoints=DataPoints, interval=Interval}=Bucket, Db) ->
+    ok = ensure_table(Period, Name, DataPoints, Db),
+
     %% How many samples we need depends on the sample interval of the next bucket.
     NextBucketInterval = NextBucket#bucket.interval,
+    Amount = ceil(NextBucketInterval / Interval),
+    Samples = get_samples(Amount, Period, Name, DataPoints, Db),
 
-    %% Load the samples needed to calculate the sample for the next bucket.
-    %NoSamples = integer_to_binary(ceil(NextBucketInterval / Interval), 10),
-    %Q = <<"select * from ",  Table/binary, " order by sample desc limit ", NoSamples/binary>>,
-    %Result = esqlite3:q(Q, Db),
+    io:fwrite(standard_error, "samples: ~p, ~p~n", [Period, Samples]),
 
-    %Samples = make_samples(Result),
-    Samples = [],
-
-    %% Load the history of the next bucket
+    %% Load the history of the next bucket in line.
     NextBucket1 = load_history(NextBucket, Db),
     
     Bucket#bucket{next_bucket=NextBucket1, samples=Samples}.
@@ -85,18 +92,45 @@ add_sample( ) ->
 %% Helpers
 %%
 
+get_samples(Amount, Period, Name, DataPoints, Db) ->
+    Number = integer_to_binary(Amount, 10),
+    Table = table_name(Name, Period),
+    Q = <<"SELECT * from \"", Table/binary, "\" ORDER  BY sample DESC LIMIT ", Number/binary>>,
+    esqlite3:q(Q, Db).
+
+ensure_table(Period, Name, DataPoints, Db) ->
+    TableName = table_name(Name, Period), 
+    case esqlite3_utils:table_exists(TableName, Db) of
+        false -> create_table(TableName, DataPoints, Db);
+        true -> ok
+    end.
+
 table_name(Metric, Period) ->
-    BaseName = table_name(Metric),
-    PeriodName = erlang:atom_to_binary(Period, utf8),
-    <<BaseName/binary, $_, PeriodName/binary>>.
+    erlang:iolist_to_binary(io_lib:format("~p", [{Metric, Period}])).
 
-table_name(Metric) -> table_name1(Metric, <<>>).
+create_table(TableName, DataPoints, Db) ->
+    Defs = [<<"sample double PRIMARY KEY NOT NULL">>, <<"time double NOT NULL">> | column_defs(DataPoints)],
+    ColumnDefs= bjoin(Defs),
+    [] = esqlite3:q(<<"CREATE TABLE \"", TableName/binary, "\"(", ColumnDefs/binary, ")">>, Db),
+    ok.
 
-table_name1([], Acc) -> Acc;
-table_name1([H|T], <<>>) -> table_name1(T, erlang:atom_to_binary(H, utf8));
-table_name1([H|T], Acc) ->
-    B = erlang:atom_to_binary(H, utf8),
-    table_name1(T, <<Acc/binary, $$, B/binary>>).
+column_defs(DpInfo) -> column_defs(DpInfo, []).
+
+column_defs([], Acc)-> lists:reverse(Acc);
+column_defs([H|T], Acc) when is_atom(H) ->
+    Name = atom_to_binary(H, utf8),
+    column_defs(T, [<<Name/binary, 32, "double NOT NULL">> | Acc]);
+column_defs([H|T], Acc) when is_integer(H) ->
+    Name = integer_to_binary(H, 10),
+    column_defs(T, [<<$_, Name/binary, 32, "double NOT NULL">> | Acc]).
+     
+bjoin(List) -> bjoin(List, <<$,>>).
+
+bjoin(List, Separator) -> bjoin(List, Separator, <<>>).
+
+bjoin([], _Separator, Acc) -> Acc;
+bjoin([H|T], Separator, <<>>) -> bjoin(T, Separator, H);
+bjoin([H|T], Separator, Acc) -> bjoin(T, Separator, <<Acc/binary, Separator/binary, H/binary>>).    
 
 make_samples(List) -> make_samples(List, []).
 
@@ -144,7 +178,6 @@ interval_test() ->
     ?assertEqual(52560.0, interval(600, year)),
     ok.
 
-
 ceil_test() ->
     ?assertEqual(2, ceil(1.2)),
     ?assertEqual(-11, ceil(-11.2)),
@@ -169,11 +202,19 @@ new_bucket_test() ->
 
     ok.
 
+init_metric_store_test() ->
+    {ok, Db} = esqlite3:open("metric-store.db"),
+
+    Bucket = init_metric_store([a,b], [min, max], Db),
+
+    io:fwrite(standard_error, "store: ~p~n", [Bucket]),
+
+    ok.
+    
+
 table_name_test() ->
-    ?assertEqual(<<"a$b_year">>, table_name([a,b], year)),
-    ?assertEqual(<<"a$b_year">>, table_name([a,b], year)),
-    ?assertEqual(<<"zotonic$site$webzmachine$data_out_month">>, table_name([zotonic, site, webzmachine, data_out], month)),
-    ?assertEqual(<<"zotonic$site$session$page_processes_month">>, table_name([zotonic, site, session, page_processes], day )),
+    ?assertEqual(<<"{[a,b],year}">>, table_name([a,b], year)),
+    ?assertEqual(<<"{[zotonic,site,webzmachine,data_out],month}">>, table_name([zotonic, site, webzmachine, data_out], month)),
     ok.
 
 
