@@ -7,69 +7,62 @@
 -define(NO_SAMPLES, 600).
 
 -export([
-    new/3,
-    load_history/2,
-
-    set_next_bucket/2
-
+    init_metric_store/3
 ]).
 
--record(bucket, {
-    name, 
+-record(metric_store, {
+    name,
     datapoints,
+
+    bucket
+}).
+
+-record(bucket, {
     period,
     interval,
 
-    insert_query, % the query needed to insert a sample.
-    history_query, % query needed to retrieve historic samples.
-
-    next_bucket, % The next bucket
     number_of_samples, % The number of samples we must remember.
 
     sample_id, % The current sample if of this table.
-    samples  % The last couple of samples needed to calculate a sample for the next bucket
+    samples, % The last couple of samples needed to calculate a sample for the next bucket
+
+    next_bucket % The next bucket
 }).
 
 init_metric_store(Name, DataPoints, Db) ->
     Periods = [hour, day, week, month, month3, month6, year],
 
     Bucket =  lists:foldr(fun(Period, B) -> 
-        New = new(Name, DataPoints, Period),
+        New = new(Period),
         case B of
             undefined -> New;
             _ -> set_next_bucket(New, B)
         end
     end, undefined, Periods),
 
-    load_history(Bucket, Db).
+    Bucket1 = load_history(Name, DataPoints, Bucket, Db),
 
+    #metric_store{name=Name, datapoints=DataPoints, bucket=Bucket1}.
 
 %% Create a new bucket.
-new(Name, DataPoints, PeriodName) ->
-    new(Name, DataPoints, PeriodName, ?NO_SAMPLES).
+new(PeriodName) ->
+    new(PeriodName, ?NO_SAMPLES).
 
-new(Name, DataPoints, PeriodName, NumberOfSamples) ->
+new(PeriodName, NumberOfSamples) ->
     Interval = interval(NumberOfSamples, PeriodName),
-
-    TableName = table_name(Name, PeriodName),
-    %HistoryQ = <<"select * from ",  Table/binary, " order by sample desc limit ", NoSamples/binary>>,
-
-    #bucket{name=Name, datapoints=DataPoints, period=PeriodName, interval=Interval}.
-
+    #bucket{period=PeriodName, interval=Interval}.
 
 %% Attach a bucket to this bucket.
 set_next_bucket(#bucket{next_bucket=undefined}=Bucket, #bucket{}=NextBucket) ->
-
     % Q = <<"select * from ",  Table/binary, " order by sample desc limit ", NoSamples/binary>>,
-
-
     Bucket#bucket{next_bucket = NextBucket}.
 
 %% Load historic samples from the specified database
-load_history(#bucket{next_bucket=undefined, name=Name, period=Period, datapoints=DataPoints}=Bucket, Db) -> 
+%% TODO: read the sample_id from the database
+load_history(Name, DataPoints, #bucket{next_bucket=undefined, period=Period}=Bucket, Db) -> 
     ok = ensure_table(Period, Name, DataPoints, Db),
-    Bucket;
-load_history(#bucket{next_bucket=NextBucket, name=Name, period=Period, datapoints=DataPoints, interval=Interval}=Bucket, Db) ->
+    Bucket#bucket{number_of_samples=0, sample_id=0, samples=[]};
+load_history(Name, DataPoints, #bucket{next_bucket=NextBucket, period=Period, interval=Interval}=Bucket, Db) ->
     ok = ensure_table(Period, Name, DataPoints, Db),
 
     %% How many samples we need depends on the sample interval of the next bucket.
@@ -77,12 +70,10 @@ load_history(#bucket{next_bucket=NextBucket, name=Name, period=Period, datapoint
     Amount = ceil(NextBucketInterval / Interval),
     Samples = get_samples(Amount, Period, Name, DataPoints, Db),
 
-    io:fwrite(standard_error, "samples: ~p, ~p~n", [Period, Samples]),
-
     %% Load the history of the next bucket in line.
-    NextBucket1 = load_history(NextBucket, Db),
+    NextBucket1 = load_history(Name, DataPoints, NextBucket, Db),
     
-    Bucket#bucket{next_bucket=NextBucket1, samples=Samples}.
+    Bucket#bucket{number_of_samples=Amount, next_bucket=NextBucket1, samples=Samples, sample_id=0}.
 
 %%
 add_sample( ) ->
@@ -158,8 +149,6 @@ seconds(year) -> seconds(day) * 365.
 interval(NumberOfSamples, Period) -> 
     seconds(Period) / NumberOfSamples.
 
-
-
 %%
 %% Tests
 %%
@@ -195,10 +184,9 @@ new_bucket_test() ->
     Metric = [a,b],
     DataPoint = [min, max],
 
-    Year = new(Metric, DataPoint, year),
-    Month6 = set_next_bucket(new(Metric, DataPoint, month6), Year),
-
-    load_history(Month6, Db),
+    Year = new(year),
+    Month6 = set_next_bucket(new(month6), Year),
+    load_history(Metric, DataPoint, Month6, Db),
 
     ok.
 
