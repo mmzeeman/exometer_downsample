@@ -27,89 +27,73 @@
     db_arg,
     db,
 
-    sample_ids
+    storages
 }).
 
--record(metric, {
-    name,
-
-    % buckets 
-    now_bucket,
-    hour_bucket,
-    day_bucket,
-    week_bucket,
-    month,
-    month3,
-    month6,
-    year
-}).
-
--record(bucket, {
-    name,
-    table_name,
-
-    history 
-}).
-
--record(sample, {
-    time
-}).
-
--type state() :: #state{}.
 -type value() :: any().
 -type options() :: any().
+-type state() :: #state{}.
 -type callback_result() ::  {ok, state()}.
 
 -spec exometer_init(options()) -> callback_result().
 exometer_init(Opts) ->
     {db_arg, DbArg} = proplists:lookup(db_arg, Opts),
+
     Db = init_database(DbArg),
-    SampleIds = dict:new(),
-    {ok, #state{db_arg = DbArg, db = Db, sample_ids = SampleIds}}.
+
+    Storages = dict:new(),
+    {ok, #state{db_arg = DbArg, db = Db, storages = Storages}}.
 
 -spec exometer_report(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), value(), state()) -> callback_result().
-exometer_report(Metric, DataPoint, Extra, Value, #state{db=Db, sample_ids=SIds}=State) ->
+exometer_report(Metric, DataPoint, Extra, Value, #state{db=Db}=State) ->
     io:fwrite(standard_error, "report: ~p~n", [{self(), Metric, DataPoint, Extra, Value}]),
 
-    {ok, Counter} = dict:find(Metric, SIds),
-    insert(Metric, DataPoint, Value, Counter+1, Db),
-    SIds1 = dict:update_counter(Metric, 1, SIds),
-
-    {ok, State#state{sample_ids=SIds1}}.
+    {ok, State}.
 
 exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
     io:fwrite(standard_error, "report_bulk: ~p~n", [{self(), Found, Extra}]),
     
-    State1 = lists:foldl(fun({Metric, Values}, #state{sample_ids=Ids}=S) -> 
-        {ok, Counter} = dict:find(Metric, Ids),
+    State1 = lists:foldl(fun({Metric, Values}, #state{}=S) -> 
+        %% DataPoint = [K || {K,_V} <- Values],
+        %% Value = [V || {_K, V} <- Values],
+        io:fwrite(standard_error, "report_bulk: values ~p~n", [Values]),
 
-        DataPoint = [K || {K,_V} <- Values],
-        Value = [V || {_K, V} <- Values],
+        %% insert(Metric, DataPoint, Value, Counter+1, Db),
+        %% Ids1 = dict:update_counter(Metric, 1, Ids),
 
-        io:fwrite(standard_error, "report_bulk: values ~p~n", [{DataPoint, Value}]),
-
-        insert(Metric, DataPoint, Value, Counter+1, Db),
-        Ids1 = dict:update_counter(Metric, 1, Ids),
-
-        S#state{sample_ids=Ids1}
+        S
     end, State, Found),
 
     {ok, State1}.
 
-    
 -spec exometer_subscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:interval(), exometer_report:extra(), state()) -> callback_result().
-exometer_subscribe(Metric, DataPoint, Interval, SubscribeOpts,  #state{db=Db, sample_ids=SIds}=State) ->
+exometer_subscribe(Metric, DataPoint, Interval, SubscribeOpts,  #state{db=Db, storages=Storages}=State) ->
     io:fwrite(standard_error, "subscribe: ~p~n", [{self(), Metric, DataPoint, Interval, SubscribeOpts}]),
 
-    SampleId = ensure_dp_table(Metric, DataPoint, Db),
-    SIds1 = dict:store(Metric, SampleId, SIds),
+    %% Initialize the storage for this metric. 
+    Store = init_storage(Metric, DataPoint, Db),
+    Storages1 = dict:store(Metric, Store, Storages),
 
-    {ok, State#state{sample_ids=SIds1}}.
+    {ok, State#state{storages=Storages1}}.
+
+init_storage(Metric, DataPoint, Db) ->
+    case esqlite3_utils:transaction(fun(TDb) -> 
+                sqlite_report_bucket:init_metric_store(Metric, DataPoint, TDb) 
+            end, Db) of
+        {rollback, _Reason}=Rollback -> 
+            throw({error, Rollback});
+        Result -> 
+            Result
+    end.
 
 -spec exometer_unsubscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), state()) -> callback_result().
-exometer_unsubscribe(Metric, DataPoint, Extra, State) ->
+exometer_unsubscribe(Metric, DataPoint, Extra, #state{storages=Storages}=State) ->
     io:fwrite(standard_error, "unsubscribe: ~p~n", [{Metric, DataPoint, Extra}]),
-    {ok, State}.
+
+    %% Remove the entry of this metric.
+    Storages1 = dict:erase(Metric, Storages),
+
+    {ok, State#state{storages=Storages1}}.
 
 -spec exometer_call(any(), pid(), state()) -> {reply, any(), state()} | {noreply, state()} | any().
 exometer_call(_Unknown, _From, State) ->
@@ -141,76 +125,16 @@ exometer_terminate(Reason, #state{db=Db}) ->
 
 init_database(DbArg) ->
     {ok, Db} = esqlite3:open(DbArg),
-    ensure_entry_table(Db),
     Db.
 
-insert(Name, DataPoint, Value, Counter, Db) when is_atom(DataPoint) ->
-    insert(Name, [DataPoint], [Value], Counter, Db);
-insert(Name, DataPoints, Values, Counter, Db) ->
-    TableName = table_name(Name),
-    Values1 = [Counter, unix_time() | Values],
-    QuestionMarks = bjoin([ <<$?>> || _V <- Values1]),
-    io:fwrite(standard_error, "insert: ~p, ~p, ~p~n", [DataPoints, QuestionMarks, Values1]),
-    esqlite3:q(<<"insert into ", TableName/binary, " (sample, time, value) values (", QuestionMarks/binary, ")">>, Values1, Db).
-
-ensure_dp_table(Name, DpInfo, Db) when is_atom(DpInfo) -> ensure_dp_table(Name, [DpInfo], Db);
-ensure_dp_table(Name, DpInfo, Db) ->
-    TableName = table_name(Name),
-    case esqlite3_utils:table_exists(TableName, Db) of
-        true -> 
-            R = esqlite3:q(<<"select sample from ", TableName/binary,  " order by sample desc limit 1">>, Db),
-            case R of
-                [] -> 0;
-                [{SampleId}] -> SampleId
-            end;
-        false -> 
-            create_dp_tables(Name, DpInfo, Db),
-            0
-    end.
-
-ensure_entry_table(Db) ->
-    case esqlite3_utils:table_exists(entry, Db) of
-        true -> ok;
-        false -> create_entry_table(Db)
-    end.
-
-create_dp_tables(Name, DpInfo, Db) ->
-    TableName = table_name(Name),
-    Defs = [<<"sample double PRIMARY KEY NOT NULL">>, <<"time double NOT NULL">> | column_defs(DpInfo)],
-    SqlDef = bjoin(Defs),
-    esqlite3:q(<<"CREATE TABLE ", TableName/binary, $(, SqlDef/binary,  $)>>, [], Db).
-
-column_defs(DpInfo) -> column_defs(DpInfo, []).
-
-column_defs([], Acc)-> lists:reverse(Acc);
-column_defs([H|T], Acc) when is_atom(H) ->
-    Name = atom_to_binary(H, utf8),
-    column_defs(T, [<<Name/binary, 32, "double NOT NULL">> | Acc]);
-column_defs([H|T], Acc) when is_integer(H) ->
-    Name = integer_to_binary(H, 10),
-    column_defs(T, [<<$_, Name/binary, 32, "double NOT NULL">> | Acc]).
-
-create_entry_table(Db) ->
-    esqlite3:exec("CREATE TABLE entry(\"type\" text)", Db).
-
--spec table_name(exometer:name()) -> binary().
-table_name(EntryName) ->
-    table_name(EntryName, <<>>).
-
-table_name([], Acc) -> Acc;
-table_name([H|T], <<>>) ->
-    table_name(T, erlang:atom_to_binary(H, utf8));
-table_name([H|T], Acc) ->
-    B = erlang:atom_to_binary(H, utf8),
-    table_name(T, <<Acc/binary, $$, B/binary>>).
-
-bjoin(List) -> bjoin(List, <<$,>>).
-
-bjoin(List, Separator) -> bjoin(List, Separator, <<>>).
-
-bjoin([], _Separator, Acc) -> Acc;
-bjoin([H|T], Separator, <<>>) -> bjoin(T, Separator, H);
-bjoin([H|T], Separator, Acc) -> bjoin(T, Separator, <<Acc/binary, Separator/binary, H/binary>>).
+%%insert(Name, DataPoint, Value, Counter, Db) when is_atom(DataPoint) ->
+%%    insert(Name, [DataPoint], [Value], Counter, Db);
+%%insert(Name, DataPoints, Values, Counter, Db) ->
+%%    TableName = table_name(Name),
+%%    Values1 = [Counter, unix_time() | Values],
+%%    QuestionMarks = bjoin([ <<$?>> || _V <- Values1]),
+%%    io:fwrite(standard_error, "insert: ~p, ~p, ~p~n", [DataPoints, QuestionMarks, Values1]),
+%%    esqlite3:q(<<"insert into ", TableName/binary, " (sample, time, value) values (", QuestionMarks/binary, ")">>, Values1, Db).
 
 %%
 %% Time
@@ -219,13 +143,6 @@ bjoin([H|T], Separator, Acc) -> bjoin(T, Separator, <<Acc/binary, Separator/bina
 unix_time() ->
     {Mega, Secs, _} = os:timestamp(),
     Mega * 1000000 + Secs.
-
-%% n = #samples in table.
-%% the interval is #seconds in period 
-%% (3600 / n) - hour
-%% (86400 / n)  - day
-%%  
-%%
 
 %%
 %% Tests
@@ -236,32 +153,6 @@ unix_time() ->
 
 init_database_test() ->
     Db = init_database(":memory:"),
-    ok.
-
-table_name_test() ->
-    ?assertEqual(<<"test$test">>, table_name([test, test])),
-    ?assertEqual(<<"a$b$c">>, table_name([a, b, c])),
-    ?assertEqual(<<"a$b$c$d">>, table_name([a, b, c, d])),
-    ok.
-
-create_dp_tables_test() ->
-    {ok, Db} = esqlite3:open(":memory:"),
-    create_dp_tables([test, a], [nprocs,avg1,avg5,avg15], Db),
-    ?assertEqual([{2}], esqlite3:q("SELECT count(*) FROM sqlite_master", Db)),
-    ok.
-
-column_defs_test() ->
-    ?assertEqual([<<"nprocs double NOT NULL">>,<<"avg1 double NOT NULL">>,<<"avg5 double NOT NULL">>,
-                      <<"avg15 double NOT NULL">>], column_defs([nprocs,avg1,avg5,avg15])),
-    ?assertEqual([<<"_50 double NOT NULL">>,<<"_70 double NOT NULL">>,<<"_90 double NOT NULL">>,
-                      <<"_99 double NOT NULL">>], column_defs([50,70,90,99])),
-    ok.
-
-ensure_dp_table_test() ->
-    {ok, Db} = esqlite3:open(":memory:"),
-
-    ?assertEqual(0, ensure_dp_table([a,b], [v], Db)),
-
     ok.
 
 -endif.

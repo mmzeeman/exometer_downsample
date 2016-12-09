@@ -29,6 +29,9 @@
     next_bucket % The next bucket
 }).
 
+% @doc Initializes the history tables needed to store the samples.
+init_metric_store(Name, DataPoint, Db) when is_atom(DataPoint) ->
+    init_metric_store(Name, [DataPoint], Db);
 init_metric_store(Name, DataPoints, Db) ->
     Periods = [hour, day, week, month, month3, month6, year],
 
@@ -204,7 +207,6 @@ table_name_test() ->
     ?assertEqual(<<"{[a,b],year}">>, table_name([a,b], year)),
     ?assertEqual(<<"{[zotonic,site,webzmachine,data_out],month}">>, table_name([zotonic, site, webzmachine, data_out], month)),
     ok.
-
 
 
 -endif.
