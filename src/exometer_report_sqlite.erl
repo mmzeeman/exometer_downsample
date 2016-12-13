@@ -47,21 +47,17 @@ exometer_init(Opts) ->
 -spec exometer_report(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), value(), state()) -> callback_result().
 exometer_report(Metric, DataPoint, Extra, Value, #state{db=Db}=State) ->
     io:fwrite(standard_error, "report: ~p~n", [{self(), Metric, DataPoint, Extra, Value}]),
-
+    %% TODO: Deze mag niet gebruikt worden.
     {ok, State}.
 
 exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
     io:fwrite(standard_error, "report_bulk: ~p~n", [{self(), Found, Extra}]),
     
-    State1 = lists:foldl(fun({Metric, Values}, #state{}=S) -> 
-        %% DataPoint = [K || {K,_V} <- Values],
-        %% Value = [V || {_K, V} <- Values],
+    %% TODO: this is one transaction.
+    State1 = lists:foldl(fun({Metric, Values}, #state{storages=Storages}=S) -> 
         io:fwrite(standard_error, "report_bulk: values ~p~n", [Values]),
-
-        %% insert(Metric, DataPoint, Value, Counter+1, Db),
-        %% Ids1 = dict:update_counter(Metric, 1, Ids),
-
-        S
+        Storages1 = dict:update(Metric, fun(Store) -> sqlite_report_bucket:insert(Store, Values, Db) end, Storages),
+        S#state{storages=Storages1}
     end, State, Found),
 
     {ok, State1}.

@@ -7,13 +7,16 @@
 -define(NO_SAMPLES, 600).
 
 -export([
-    init_metric_store/3
+    init_metric_store/3,
+    insert/3
 ]).
 
 -record(metric_store, {
     name,
     datapoints,
 
+    next_time,
+    samples,  % now samples
     bucket
 }).
 
@@ -23,11 +26,18 @@
 
     number_of_samples, % The number of samples we must remember.
 
+    next_time, 
     sample_id, % The current sample if of this table.
     samples, % The last couple of samples needed to calculate a sample for the next bucket
 
     next_bucket % The next bucket
 }).
+
+-record(sample, {
+    time,
+    values
+}).
+
 
 % @doc Initializes the history tables needed to store the samples.
 init_metric_store(Name, DataPoint, Db) when is_atom(DataPoint) ->
@@ -44,8 +54,35 @@ init_metric_store(Name, DataPoints, Db) ->
     end, undefined, Periods),
 
     Bucket1 = load_history(Name, DataPoints, Bucket, Db),
+    Now = unix_time(),
+    NextTime = Now + interval(Bucket1),
 
-    #metric_store{name=Name, datapoints=DataPoints, bucket=Bucket1}.
+    #metric_store{name=Name, next_time=NextTime, datapoints=DataPoints, samples=[], bucket=Bucket1}.
+
+% @doc Insert a new sample in the store.
+%
+insert(#metric_store{bucket=Bucket, next_time=NextTime, samples=Samples}=MS, Values, Db) ->
+    Now = unix_time(),
+    io:fwrite(standard_error, "insert: ~p, ~p, ~p~n", [Now, MS, Values]),
+    S = #sample{time=Now, values=Values},
+    Samples1 = [S|Samples],
+
+    case Now >= NextTime of
+        false -> 
+            MS#metric_store{samples=Samples1};
+        true ->
+            io:fwrite(standard_error, "insert-bucket: ~p~n", [Samples1]),
+            MS#metric_store{samples=[], next_time=Now+interval(Bucket)}
+    end.
+
+
+%%
+%% Helpers
+%%
+
+unix_time() ->
+    {Mega, Secs, _} = os:timestamp(),
+    Mega * 1000000 + Secs.
 
 %% Create a new bucket.
 new(PeriodName) ->
@@ -58,13 +95,15 @@ new(PeriodName, NumberOfSamples) ->
 %% Attach a bucket to this bucket.
 set_next_bucket(#bucket{next_bucket=undefined}=Bucket, #bucket{}=NextBucket) ->
     % Q = <<"select * from ",  Table/binary, " order by sample desc limit ", NoSamples/binary>>,
+
     Bucket#bucket{next_bucket = NextBucket}.
 
 %% Load historic samples from the specified database
 %% TODO: read the sample_id from the database
-load_history(Name, DataPoints, #bucket{next_bucket=undefined, period=Period}=Bucket, Db) -> 
+load_history(Name, DataPoints, #bucket{next_bucket=undefined, period=Period, interval=Interval}=Bucket, Db) -> 
     ok = ensure_table(Period, Name, DataPoints, Db),
-    Bucket#bucket{number_of_samples=0, sample_id=0, samples=[]};
+    NextTime = unix_time() + Interval,
+    Bucket#bucket{number_of_samples=0, sample_id=0, next_time=NextTime, samples=[]};
 load_history(Name, DataPoints, #bucket{next_bucket=NextBucket, period=Period, interval=Interval}=Bucket, Db) ->
     ok = ensure_table(Period, Name, DataPoints, Db),
 
@@ -73,10 +112,15 @@ load_history(Name, DataPoints, #bucket{next_bucket=NextBucket, period=Period, in
     Amount = ceil(NextBucketInterval / Interval),
     Samples = get_samples(Amount, Period, Name, DataPoints, Db),
 
+    NextTime = unix_time() + Interval,
+
     %% Load the history of the next bucket in line.
     NextBucket1 = load_history(Name, DataPoints, NextBucket, Db),
-    
-    Bucket#bucket{number_of_samples=Amount, next_bucket=NextBucket1, samples=Samples, sample_id=0}.
+
+    Bucket#bucket{number_of_samples=Amount, next_time=NextTime, next_bucket=NextBucket1, samples=Samples, sample_id=0}.
+
+interval(#bucket{interval=Interval}) ->
+     Interval.
 
 %%
 add_sample( ) ->
@@ -195,11 +239,8 @@ new_bucket_test() ->
 
 init_metric_store_test() ->
     {ok, Db} = esqlite3:open("metric-store.db"),
-
     Bucket = init_metric_store([a,b], [min, max], Db),
-
     io:fwrite(standard_error, "store: ~p~n", [Bucket]),
-
     ok.
     
 
@@ -208,5 +249,5 @@ table_name_test() ->
     ?assertEqual(<<"{[zotonic,site,webzmachine,data_out],month}">>, table_name([zotonic, site, webzmachine, data_out], month)),
     ok.
 
-
 -endif.
+
