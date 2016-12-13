@@ -56,7 +56,9 @@ exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
     %% TODO: this is one transaction.
     State1 = lists:foldl(fun({Metric, Values}, #state{storages=Storages}=S) -> 
         io:fwrite(standard_error, "report_bulk: values ~p~n", [Values]),
-        Storages1 = dict:update(Metric, fun(Store) -> sqlite_report_bucket:insert(Store, Values, Db) end, Storages),
+        Storages1 = dict:update(Metric, fun(Store) -> 
+                sqlite_report_bucket:insert(Store, Values, Db) 
+            end, Storages),
         S#state{storages=Storages1}
     end, State, Found),
 
@@ -66,7 +68,7 @@ exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
 exometer_subscribe(Metric, DataPoint, Interval, SubscribeOpts,  #state{db=Db, storages=Storages}=State) ->
     io:fwrite(standard_error, "subscribe: ~p~n", [{self(), Metric, DataPoint, Interval, SubscribeOpts}]),
 
-    %% Initialize the storage for this metric. 
+    %% Initialize the storage for this metric. The storage combines the buckets   
     Store = init_storage(Metric, DataPoint, Db),
     Storages1 = dict:store(Metric, Store, Storages),
 
