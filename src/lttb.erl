@@ -51,16 +51,20 @@ downsample_stream(Selected, BucketSize) ->
 % @doc Add a point for downsampling. Returns {ok, Point, State} when a new point is selected.
 %      Returns {continue, State} otherwise.
 add(Point, #lttb{selected=undefined}=State) ->
+    io:fwrite(standard_error, "inserted first point~n", []),
     {continue, State#lttb{selected=Point}};
 add(Point, #lttb{bucket_size=S, selected=P, bucket2=B2, bucket3=B3}=State) when S =:=length(B2) andalso S =:= length(B3)+1 ->
     % We can calculate the next selected point.
+    io:fwrite(standard_error, "downsample point~n", []),
     B3_1 = [Point|B3],
     AvgPoint = average_point(B3_1, S),
     Highest = rank(B2, P, AvgPoint),
     {ok, Highest, State#lttb{selected=Highest, bucket2=B3_1, bucket3=[]} };
 add(Point, #lttb{bucket_size=S, bucket2=B2}=State) when length(B2) < S ->
+    io:fwrite(standard_error, "filling bucket 2~n", []),
     {continue, State#lttb{bucket2=[Point|B2]}};
 add(Point, #lttb{bucket_size=S, bucket2=B2, bucket3=B3}=State) when length(B3) < S andalso length(B2) =:= S ->
+    io:fwrite(standard_error, "filling bucket 3~n", []),
     {continue, State#lttb{bucket3=[Point|B3]}}.
 
 

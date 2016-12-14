@@ -29,28 +29,47 @@ init_metric_store(Name, DataPoint, Db) when is_atom(DataPoint) ->
 init_metric_store(Name, DataPoints, Db) ->
     % Periods = [hour, day, week, month, month3, month6, year],
     Periods = [hour, day],
-    DpStores = [{ {Name, DP}, init_dp_store(Name, DP, Periods, Db)}  || DP <- DataPoints],
+    DpStores = [{DP, init_dp_store(Name, DP, Periods, Db)}  || DP <- DataPoints],
     #store{stores = DpStores}.
 
-init_dp_store(MetricName, DataPoint, Periods, Db) ->
+init_dp_store(_MetricName, _DataPoint, Periods, _Db) ->
     Samplers = [init_sampler(Period)  || Period <- Periods],
     #dp_store{samplers=Samplers}.
 
 init_sampler(hour) ->
     lttb:downsample_stream(6);
 init_sampler(day) ->
-    lttb:downsample_stream(144).
+    lttb:downsample_stream(24).
 
 
 % @doc Insert a new sample in the store.
 %
-insert(#store{stores=Stores}=MS, Values, Db) ->
+insert(#store{stores=Stores}=MS, Values, _Db) ->
     Now = unix_time(),
+    io:fwrite(standard_error, "insert: ~p~n", [Values]),
+    Stores1 = [ {Dp, insert_value(Store, Now, proplists:get_value(Dp, Values))} || {Dp, Store} <- Stores],
+    MS#store{stores=Stores1}.
 
-    io:fwrite(standard_error, "insert: ~p, ~p, ~p~n", [Now, MS, Values]),
+insert_value(Store, _Now, undefined) -> Store;
+insert_value(#dp_store{samplers=Samplers}=Store, Now, Value) ->
+    io:fwrite(standard_error, "insert_value: ~p ~p ~p~n", [Now, Value, Samplers]),
+    Samplers1 = insert_sample(Samplers, {Now, Value}, false, []),
+    io:fwrite(standard_error, "insert_value: done~n", []),
+    Store#dp_store{samplers=Samplers1}.
 
-    MS.
-
+insert_sample([], _Point, _Ready, Acc) -> lists:reverse(Acc);
+insert_sample([H|T], _Point, true, Acc) -> insert_sample(T, _Point, true, [H|Acc]);
+insert_sample([H|T], {_Now, _Value}=Point, false, Acc) ->
+    case lttb:add(Point, H) of
+        {continue, H1} -> 
+            %% Done
+            io:fwrite(standard_error, "done: ~p~p~n", [Point, H1]),
+            insert_sample(T, Point, true, [H1|Acc]);
+        {ok, OverflowPoint, H1} ->
+            %% Punt moet insert worden
+            io:fwrite(standard_error, "overflow: ~p~n", [OverflowPoint]),
+            insert_sample(T, OverflowPoint, false, [H1|Acc])
+    end.
 
 %%
 %% Helpers
