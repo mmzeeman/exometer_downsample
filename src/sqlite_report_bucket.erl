@@ -32,43 +32,46 @@ init_metric_store(Name, DataPoints, Db) ->
     DpStores = [{DP, init_dp_store(Name, DP, Periods, Db)}  || DP <- DataPoints],
     #store{stores = DpStores}.
 
-init_dp_store(_MetricName, _DataPoint, Periods, _Db) ->
-    Samplers = [init_sampler(Period)  || Period <- Periods],
+init_dp_store(MetricName, DataPoint, Periods, Db) ->
+    Samplers = [begin 
+            Table = init_table(MetricName, DataPoint, Period, Db),
+             init_sampler(Period, Table) 
+         end || Period <- Periods],
+
     #dp_store{samplers=Samplers}.
 
-init_sampler(hour) ->
-    lttb:downsample_stream(6);
-init_sampler(day) ->
-    lttb:downsample_stream(24).
+init_table(MetricName, DataPoint, Period, Db) ->
+    {ok, TableName} = ensure_table(MetricName, DataPoint, Period, Db),
+    <<"INSERT INTO \"", TableName/binary, "\" VALUES (?, ?)">>.
+
+init_sampler(hour, Table) ->
+    lttb:downsample_stream(6, Table);
+init_sampler(day, Table) ->
+    lttb:downsample_stream(24, Table).
 
 
 % @doc Insert a new sample in the store.
 %
-insert(#store{stores=Stores}=MS, Values, _Db) ->
+insert(#store{stores=Stores}=MS, Values, InsertDb) ->
     Now = unix_time(),
-    io:fwrite(standard_error, "insert: ~p~n", [Values]),
-    Stores1 = [ {Dp, insert_value(Store, Now, proplists:get_value(Dp, Values))} || {Dp, Store} <- Stores],
+    Stores1 = [ {Dp, insert_value(Store, Now, proplists:get_value(Dp, Values), InsertDb)} || {Dp, Store} <- Stores],
     MS#store{stores=Stores1}.
 
-insert_value(Store, _Now, undefined) -> Store;
-insert_value(#dp_store{samplers=Samplers}=Store, Now, Value) ->
-    io:fwrite(standard_error, "insert_value: ~p ~p ~p~n", [Now, Value, Samplers]),
-    Samplers1 = insert_sample(Samplers, {Now, Value}, false, []),
-    io:fwrite(standard_error, "insert_value: done~n", []),
+insert_value(Store, _Now, undefined, _InsertDb) -> Store;
+insert_value(#dp_store{samplers=Samplers}=Store, Now, Value, InsertDb) ->
+    Samplers1 = insert_sample(InsertDb, Samplers, {Now, Value}, false, []),
     Store#dp_store{samplers=Samplers1}.
 
-insert_sample([], _Point, _Ready, Acc) -> lists:reverse(Acc);
-insert_sample([H|T], _Point, true, Acc) -> insert_sample(T, _Point, true, [H|Acc]);
-insert_sample([H|T], {_Now, _Value}=Point, false, Acc) ->
+insert_sample(_InsertDb, [], _Point, _Ready, Acc) -> lists:reverse(Acc);
+insert_sample(InsertDb, [H|T], _Point, true, Acc) -> insert_sample(InsertDb, T, _Point, true, [H|Acc]);
+insert_sample(InsertDb, [H|T], Point, false, Acc) ->
     case lttb:add(Point, H) of
         {continue, H1} -> 
             %% Done
-            io:fwrite(standard_error, "done: ~p~p~n", [Point, H1]),
-            insert_sample(T, Point, true, [H1|Acc]);
-        {ok, OverflowPoint, H1} ->
-            %% Punt moet insert worden
-            io:fwrite(standard_error, "overflow: ~p~n", [OverflowPoint]),
-            insert_sample(T, OverflowPoint, false, [H1|Acc])
+            insert_sample(InsertDb, T, Point, true, [H1|Acc]);
+        {ok, {Ts, V}=P, H1} ->
+            InsertDb(lttb:state(H1), [Ts, V]),
+            insert_sample(InsertDb, T, P, false, [H1|Acc])
     end.
 
 %%
@@ -84,22 +87,21 @@ unix_time() ->
 %% Helpers
 %%
 
-%ensure_table(Period, Name, DataPoints, Db) ->
-%    TableName = table_name(Name, Period), 
-%    case esqlite3_utils:table_exists(TableName, Db) of
-%        false -> 
-%            create_table(TableName, DataPoints, Db);
-%        true -> 
-%            ok
-%    end.
+ensure_table(Name, DataPoint, Period, Db) ->
+    TableName = table_name(Name, DataPoint, Period), 
+    case esqlite3_utils:table_exists(TableName, Db) of
+        false -> create_table(TableName, Db);
+        true -> ok
+    end,
+    {ok, TableName}.
 
-%table_name(Metric, Period) ->
-%    erlang:iolist_to_binary(io_lib:format("~p", [{Metric, Period}])).
+table_name(Metric, DataPoint, Period) ->
+    erlang:iolist_to_binary(io_lib:format("~p", [{Metric, DataPoint, Period}])).
 
-%create_table(TableName, DataPoints, Db) ->
-%    ColumnDefs = <<"sample double PRIMARY KEY NOT NULL, time double NOT NULL, value double NOT NULL">>,
-%    [] = esqlite3:q(<<"CREATE TABLE \"", TableName/binary, "\"(", ColumnDefs/binary, ")">>, Db),
-%    ok.
+create_table(TableName, Db) ->
+    ColumnDefs = <<"time double PRIMARY KEY NOT NULL, value double NOT NULL">>,
+    [] = esqlite3:q(<<"CREATE TABLE \"", TableName/binary, "\"(", ColumnDefs/binary, ")">>, Db),
+    ok.
 
 
 % heuristics for the number of seconds in a period.

@@ -38,36 +38,33 @@
 -spec exometer_init(options()) -> callback_result().
 exometer_init(Opts) ->
     {db_arg, DbArg} = proplists:lookup(db_arg, Opts),
-
+    {report_bulk, true} = proplists:lookup(report_bulk, Opts),
     Db = init_database(DbArg),
-
     Storages = dict:new(),
     {ok, #state{db_arg = DbArg, db = Db, storages = Storages}}.
 
 -spec exometer_report(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), value(), state()) -> callback_result().
 exometer_report(Metric, DataPoint, Extra, Value, #state{db=Db}=State) ->
-    io:fwrite(standard_error, "report: ~p~n", [{self(), Metric, DataPoint, Extra, Value}]),
-    %% TODO: Deze mag niet gebruikt worden.
+    lager:warning("Use {report_bulk, true}."),
     {ok, State}.
 
 exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
-    io:fwrite(standard_error, "report_bulk: ~p~n", [{self(), Found, Extra}]),
-    
-    %% TODO: this is one transaction.
-    State1 = lists:foldl(fun({Metric, Values}, #state{storages=Storages}=S) -> 
-        io:fwrite(standard_error, "report_bulk: values ~p~n", [Values]),
-        Storages1 = dict:update(Metric, fun(Store) -> 
-                sqlite_report_bucket:insert(Store, Values, Db) 
-            end, Storages),
-        S#state{storages=Storages1}
-    end, State, Found),
+    Transaction = fun(TDb) ->
+        InsertDb = fun(Query, Args) -> esqlite3:q(Query, Args, TDb) end,
+        lists:foldl(fun({Metric, Values}, #state{storages=Storages}=S) -> 
+             Storages1 = dict:update(Metric, fun(Store) -> 
+                sqlite_report_bucket:insert(Store, Values, InsertDb) 
+                end, Storages),
+            S#state{storages=Storages1}
+        end, State, Found)
+    end,
+
+    State1 = esqlite3_utils:transaction(Transaction, Db),
 
     {ok, State1}.
 
 -spec exometer_subscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:interval(), exometer_report:extra(), state()) -> callback_result().
 exometer_subscribe(Metric, DataPoint, Interval, SubscribeOpts,  #state{db=Db, storages=Storages}=State) ->
-    io:fwrite(standard_error, "subscribe: ~p~n", [{self(), Metric, DataPoint, Interval, SubscribeOpts}]),
-
     %% Initialize the storage for this metric. The storage combines the buckets   
     Store = init_storage(Metric, DataPoint, Db),
     Storages1 = dict:store(Metric, Store, Storages),
@@ -86,8 +83,6 @@ init_storage(Metric, DataPoint, Db) ->
 
 -spec exometer_unsubscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), state()) -> callback_result().
 exometer_unsubscribe(Metric, DataPoint, Extra, #state{storages=Storages}=State) ->
-    io:fwrite(standard_error, "unsubscribe: ~p~n", [{Metric, DataPoint, Extra}]),
-
     %% Remove the entry of this metric.
     Storages1 = dict:erase(Metric, Storages),
 
