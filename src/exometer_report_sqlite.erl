@@ -21,6 +21,10 @@
    exometer_terminate/2
 ]).
 
+-export([
+    get_history/2, get_history/3
+]).
+
 -include_lib("exometer_core/include/exometer.hrl").
 
 -record(state, {
@@ -37,6 +41,8 @@
 
 -spec exometer_init(options()) -> callback_result().
 exometer_init(Opts) ->
+    lager:info("~p(~p): Starting", [?MODULE, Opts]),
+
     {db_arg, DbArg} = proplists:lookup(db_arg, Opts),
     {report_bulk, true} = proplists:lookup(report_bulk, Opts),
     Db = init_database(DbArg),
@@ -45,12 +51,14 @@ exometer_init(Opts) ->
 
 -spec exometer_report(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), value(), state()) -> callback_result().
 exometer_report(Metric, DataPoint, Extra, Value, #state{db=Db}=State) ->
-    lager:warning("Use {report_bulk, true}."),
+    lager:warning("~p: Use {report_bulk, true}.", [?MODULE]),
     {ok, State}.
 
 exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
     Transaction = fun(TDb) ->
-        InsertDb = fun(Query, Args) -> esqlite3:q(Query, Args, TDb) end,
+        InsertDb = fun(Query, Args) -> 
+            esqlite3:q(Query, Args, TDb)
+        end,
         lists:foldl(fun({Metric, Values}, #state{storages=Storages}=S) -> 
              Storages1 = dict:update(Metric, fun(Store) -> 
                 sqlite_report_bucket:insert(Store, Values, InsertDb) 
@@ -59,7 +67,10 @@ exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
         end, State, Found)
     end,
 
-    State1 = esqlite3_utils:transaction(Transaction, Db),
+    State1 = case esqlite3_utils:transaction(Transaction, Db) of
+        {rollback, _}=R -> throw(R);
+        S -> S
+    end,
 
     {ok, State1}.
 
@@ -111,6 +122,26 @@ exometer_setopts(_Metric, _Options, _Status, State) ->
 -spec exometer_terminate(any(), state()) -> any().
 exometer_terminate(Reason, #state{db=Db}) ->
     ok = esqlite3:close(Db).
+
+-spec get_history(exometer:metric(), exometer_report:datapoint(), any())  -> list().
+get_history(Metric, DataPoint) ->
+    %% TODO: fix hard code db name. 
+    {ok, Conn} = esqlite3:open("priv/log/metrics.db"),
+    Result = get_history(Metric, DataPoint, Conn),
+    esqlite3:close(Conn),
+    Result.
+
+get_history(Metric, DataPoint, Db) ->
+    F = fun(TDb) -> get_history(Metric, DataPoint, TDb, []) end,
+    esqlite3_utils:transaction(F, Db).
+
+% @doc Get the historic values of a datapoint
+get_history(Metric, [], Db, Acc) -> lists:reverse(Acc);
+get_history(Metric, [Point|Rest], Db, Acc) ->
+    Hour = sqlite_report_bucket:get_history(Metric, Point, hour, Db),
+    Day = sqlite_report_bucket:get_history(Metric, Point, day, Db),
+    Stats = [{hour, Hour}, {day, Day}],
+    get_history(Metric, Rest, Db, [{{Metric, Point}, Stats} | Acc]).
    
 %%
 %% Helpers
@@ -119,19 +150,6 @@ exometer_terminate(Reason, #state{db=Db}) ->
 init_database(DbArg) ->
     {ok, Db} = esqlite3:open(DbArg),
     Db.
-
-%%insert(Name, DataPoint, Value, Counter, Db) when is_atom(DataPoint) ->
-%%    insert(Name, [DataPoint], [Value], Counter, Db);
-%%insert(Name, DataPoints, Values, Counter, Db) ->
-%%    TableName = table_name(Name),
-%%    Values1 = [Counter, unix_time() | Values],
-%%    QuestionMarks = bjoin([ <<$?>> || _V <- Values1]),
-%%    io:fwrite(standard_error, "insert: ~p, ~p, ~p~n", [DataPoints, QuestionMarks, Values1]),
-%%    esqlite3:q(<<"insert into ", TableName/binary, " (sample, time, value) values (", QuestionMarks/binary, ")">>, Values1, Db).
-
-%%
-%% Time
-%% 
 
 unix_time() ->
     {Mega, Secs, _} = os:timestamp(),

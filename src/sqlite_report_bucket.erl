@@ -9,7 +9,9 @@
 -export([
     init_metric_store/3,
 
-    insert/3
+    insert/3,
+
+    get_history/4
 ]).
 
 
@@ -73,6 +75,10 @@ insert_sample(InsertDb, [H|T], Point, false, Acc) ->
             InsertDb(lttb:state(H1), [Ts, V]),
             insert_sample(InsertDb, T, P, false, [H1|Acc])
     end.
+
+get_history(Metric, DataPoint, Period, Db) ->
+    TableName = table_name(Metric, DataPoint, Period),
+    [{z_convert:to_integer(T), V} || {T, V} <- esqlite3:q(<<"SELECT time, value FROM\"", TableName/binary, "\" ORDER BY time DESC LIMIT 600">>, Db)].
 
 %%
 %% Helpers
