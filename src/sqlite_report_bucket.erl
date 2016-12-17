@@ -143,8 +143,6 @@ interval_test() ->
 init_metric_store_test() ->
     {ok, Db} = esqlite3:open("metric-store.db"),
     Bucket = init_metric_store([a,b], [min, max], Db),
-
-    io:fwrite(standard_error, "store: ~p~n", [Bucket]),
     ok.
 
 %table_name_test() ->

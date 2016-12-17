@@ -118,7 +118,7 @@ downsample_test() ->
     ok.
 
 downsample_stream_test() ->
-    S = downsample_stream({1,1}, 3),
+    S = downsample_stream({1,1}, 3, undefined),
     {continue, S1} = add({2,2}, S),
     {continue, S2} = add({3,3}, S1),
     {continue, S3} = add({4,3}, S2),
@@ -130,11 +130,9 @@ downsample_stream_test() ->
     {ok, {5,6}, S9} = add({10,4}, S8),
     {continue, S10} = add({11,1}, S9),
     {continue, S11} = add({12,2}, S10),
-    {ok, {8,5}, S12} = add({13,6}, S11),
+    {ok, {8,5}, _S12} = add({13,6}, S11),
 
     ok.
-
-
 
 average_point_test() ->
     ?assertEqual({1.0,1.0}, average_point([{1,1}, {1,1}, {1,1}, {2,2}, {2,2}, {2,2}], 3)),

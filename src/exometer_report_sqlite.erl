@@ -50,11 +50,11 @@ exometer_init(Opts) ->
     {ok, #state{db_arg = DbArg, db = Db, storages = Storages}}.
 
 -spec exometer_report(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), value(), state()) -> callback_result().
-exometer_report(Metric, DataPoint, Extra, Value, #state{db=Db}=State) ->
+exometer_report(_Metric, _DataPoint, _Extra, _Value, State) ->
     lager:warning("~p: Use {report_bulk, true}.", [?MODULE]),
     {ok, State}.
 
-exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
+exometer_report_bulk(Found, _Extra,  #state{db=Db}=State) ->
     Transaction = fun(TDb) ->
         InsertDb = fun(Query, Args) -> 
             esqlite3:q(Query, Args, TDb)
@@ -75,7 +75,7 @@ exometer_report_bulk(Found, Extra,  #state{db=Db}=State) ->
     {ok, State1}.
 
 -spec exometer_subscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:interval(), exometer_report:extra(), state()) -> callback_result().
-exometer_subscribe(Metric, DataPoint, Interval, SubscribeOpts,  #state{db=Db, storages=Storages}=State) ->
+exometer_subscribe(Metric, DataPoint, _Interval, _SubscribeOpts,  #state{db=Db, storages=Storages}=State) ->
     %% Initialize the storage for this metric. The storage combines the buckets   
     Store = init_storage(Metric, DataPoint, Db),
     Storages1 = dict:store(Metric, Store, Storages),
@@ -93,7 +93,7 @@ init_storage(Metric, DataPoint, Db) ->
     end.
 
 -spec exometer_unsubscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), state()) -> callback_result().
-exometer_unsubscribe(Metric, DataPoint, Extra, #state{storages=Storages}=State) ->
+exometer_unsubscribe(Metric, _DataPoint, _Extra, #state{storages=Storages}=State) ->
     %% Remove the entry of this metric.
     Storages1 = dict:erase(Metric, Storages),
 
@@ -112,7 +112,7 @@ exometer_info(_Unknown, State) ->
     {ok, State}.
 
 -spec exometer_newentry(exometer:entry(), state()) -> callback_result().
-exometer_newentry(#exometer_entry{name=Name, type=Type},  #state{db=Db}=State) ->
+exometer_newentry(_Entry,  State) ->
     {ok, State}.
 
 -spec exometer_setopts(exometer:entry(), options(), exometer:status(), state()) -> callback_result().
@@ -121,7 +121,12 @@ exometer_setopts(_Metric, _Options, _Status, State) ->
 
 -spec exometer_terminate(any(), state()) -> any().
 exometer_terminate(Reason, #state{db=Db}) ->
+    lager:info("~p(~p): Terminating", [?MODULE, Reason]),
     ok = esqlite3:close(Db).
+
+%%
+%% Extra API
+%%
 
 -spec get_history(exometer:metric(), exometer_report:datapoint(), any())  -> list().
 get_history(Metric, DataPoint) ->
@@ -131,17 +136,17 @@ get_history(Metric, DataPoint) ->
     esqlite3:close(Conn),
     Result.
 
+get_history(Metric, DataPoint, Db) when is_atom(DataPoint) -> get_history(Metric, [DataPoint], Db);
 get_history(Metric, DataPoint, Db) ->
-    F = fun(TDb) -> get_history(Metric, DataPoint, TDb, []) end,
+    F = fun(TDb) -> get_history(Metric, DataPoint, [hour, day], TDb, []) end,
     esqlite3_utils:transaction(F, Db).
 
 % @doc Get the historic values of a datapoint
-get_history(Metric, [], Db, Acc) -> lists:reverse(Acc);
-get_history(Metric, [Point|Rest], Db, Acc) ->
-    Hour = sqlite_report_bucket:get_history(Metric, Point, hour, Db),
-    Day = sqlite_report_bucket:get_history(Metric, Point, day, Db),
-    Stats = [{hour, Hour}, {day, Day}],
-    get_history(Metric, Rest, Db, [{{Metric, Point}, Stats} | Acc]).
+get_history(_Metric, [], _Periods, _Db, Acc) -> lists:reverse(Acc);
+get_history(Metric, [Point|Rest], Periods, Db, Acc) ->
+    DataPoints = [sqlite_report_bucket:get_history(Metric, Point, Period, Db) || Period <- Periods],
+    Stats = lists:zip(Periods, DataPoints),
+    get_history(Metric, Rest, Periods, Db, [{{Metric, Point}, Stats} | Acc]).
    
 %%
 %% Helpers
@@ -150,10 +155,6 @@ get_history(Metric, [Point|Rest], Db, Acc) ->
 init_database(DbArg) ->
     {ok, Db} = esqlite3:open(DbArg),
     Db.
-
-unix_time() ->
-    {Mega, Secs, _} = os:timestamp(),
-    Mega * 1000000 + Secs.
 
 %%
 %% Tests
