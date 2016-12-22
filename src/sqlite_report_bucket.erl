@@ -78,7 +78,7 @@ insert_sample(InsertDb, [H|T], Point, false, Acc) ->
 
 get_history(Metric, DataPoint, Period, Db) ->
     TableName = table_name(Metric, DataPoint, Period),
-    [{z_convert:to_integer(T), V} || {T, V} <- esqlite3:q(<<"SELECT time, value FROM\"", TableName/binary, "\" ORDER BY time DESC LIMIT 600">>, Db)].
+    [ [{time, z_convert:to_integer(T)}, {value, V}] || {T, V} <- esqlite3:q(<<"SELECT time, value FROM\"", TableName/binary, "\" ORDER BY time DESC LIMIT 600">>, Db)].
 
 %%
 %% Helpers
