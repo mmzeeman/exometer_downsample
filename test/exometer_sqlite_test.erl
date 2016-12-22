@@ -9,9 +9,11 @@
 
 do_test() ->
      Subscribers =  [ 
-        {reporters, [ {exometer_report_sqlite, [
-                {db_arg, ":memory:"},
-                {report_bulk, true}
+        {reporters, [ {exometer_report_sqlite, [ 
+            {storage_handler, custom_handler}
+            {storage_handler_args, []}
+            {db_arg, ":memory:"}, 
+            {report_bulk, true}
             ]}
         ]}],
 

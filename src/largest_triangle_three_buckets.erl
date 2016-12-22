@@ -8,7 +8,7 @@
 %% Live example: http://d3fc.github.io/d3fc-sample/
 %%
 
--module(lttb).
+-module(largest_triangle_three_buckets).
 
 -export([
     downsample/2,

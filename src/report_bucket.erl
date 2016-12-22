@@ -1,13 +1,14 @@
 %%
-%% 
+%% Report bucket
 %% 
 
--module(sqlite_report_bucket).
+-module(report_bucket).
 
 -define(NO_SAMPLES, 600).
 
 -export([
-    init_metric_store/3,
+    init_metric_store/4,
+    init_metric_store/5,
 
     insert/3,
 
@@ -26,30 +27,33 @@
 
 
 % @doc Initializes the history tables needed to store the samples.
-init_metric_store(Name, DataPoint, Db) when is_atom(DataPoint) ->
-    init_metric_store(Name, [DataPoint], Db);
-init_metric_store(Name, DataPoints, Db) ->
-    % Periods = [hour, day, week, month, month3, month6, year],
-    Periods = [hour, day],
-    DpStores = [{DP, init_dp_store(Name, DP, Periods, Db)}  || DP <- DataPoints],
+init_metric_store(Name, DataPoint, Handler, Db) when is_atom(DataPoint) ->
+    init_metric_store(Name, [DataPoint], Handler, Db);
+init_metric_store(Name, DataPoints, Handler, Db) ->
+    init_metric_store(Name, DataPoints, [hour, day], Db).
+
+init_metric_store(Metric, DataPoints, Periods, Handler,  Storage) ->
+    F = fun(Stg) ->
+        [{DP, init_dp_store(Name, DP, Periods, Handler, Stg)}  || DP <- DataPoints],
+    end,
+    DpStores = Handler:storage_transaction(F, Storage),
     #store{stores = DpStores}.
 
-init_dp_store(MetricName, DataPoint, Periods, Db) ->
+init_dp_store(MetricName, DataPoint, Periods, Handler, Storage) ->
     Samplers = [begin 
-            Table = init_table(MetricName, DataPoint, Period, Db),
+            Table = init_table(MetricName, DataPoint, Period, Handler, Storage),
              init_sampler(Period, Table) 
          end || Period <- Periods],
 
     #dp_store{samplers=Samplers}.
 
-init_table(MetricName, DataPoint, Period, Db) ->
-    {ok, TableName} = ensure_table(MetricName, DataPoint, Period, Db),
-    <<"INSERT INTO \"", TableName/binary, "\" VALUES (?, ?)">>.
+init_table(MetricName, DataPoint, Period, Handler, Storage) ->
+    Handler:storage_init_datapoint(MetricName, DataPoint, Period, Storage).
 
 init_sampler(hour, Table) ->
-    lttb:downsample_stream(6, Table);
+    largest_triangle_three_buckets:downsample_stream(6, Table);
 init_sampler(day, Table) ->
-    lttb:downsample_stream(24, Table).
+    largest_triangle_three_buckets:downsample_stream(24, Table).
 
 
 % @doc Insert a new sample in the store.
@@ -67,12 +71,12 @@ insert_value(#dp_store{samplers=Samplers}=Store, Now, Value, InsertDb) ->
 insert_sample(_InsertDb, [], _Point, _Ready, Acc) -> lists:reverse(Acc);
 insert_sample(InsertDb, [H|T], _Point, true, Acc) -> insert_sample(InsertDb, T, _Point, true, [H|Acc]);
 insert_sample(InsertDb, [H|T], Point, false, Acc) ->
-    case lttb:add(Point, H) of
+    case largest_triangle_three_buckets:add(Point, H) of
         {continue, H1} -> 
             %% Done
             insert_sample(InsertDb, T, Point, true, [H1|Acc]);
         {ok, {Ts, V}=P, H1} ->
-            InsertDb(lttb:state(H1), [Ts, V]),
+            InsertDb(largest_triangle_three_buckets:state(H1), [Ts, V]),
             insert_sample(InsertDb, T, P, false, [H1|Acc])
     end.
 
