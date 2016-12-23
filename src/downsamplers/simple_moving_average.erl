@@ -2,7 +2,7 @@
 %% Simple Moving Average
 %%
 
--module(sma).
+-module(simple_moving_average).
 
 -export([
     new/1, 

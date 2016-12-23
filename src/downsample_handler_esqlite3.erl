@@ -2,37 +2,46 @@
 %% SQLite3 Storage handler module
 %%
 
--module(esqlite3_handler).
+-module(downsample_handler_esqlite3).
 
 -export([
-    storage_init/1,
-    storage_close/2,
-    storage_transaction/1,
-    storage_init_datapoint/2,
-    storage_insert_datapoint/2
+    downsample_handler_init/1,
+    downsample_handler_close/1,
+    downsample_handler_transaction/2,
+    downsample_handler_init_datapoint/4,
+    downsample_handler_insert_datapoint/3
 ]).
 
-% Initialize the storage
-storage_init(Args) ->
-    init_database(DbArg) ->
+-export([
+      get_history/4
+]).
+
+-behaviour(downsample_handler).
+
+%%
+%% Callbacks
+%%
+
+% Initialize the handler 
+downsample_handler_init([DbArg]) ->
     {ok, Db} = esqlite3:open(DbArg),
     Db.
 
-% Close the storage
-storage_close(Db) ->
+% Close the handler 
+downsample_handler_close(Db) ->
     ok = esqlite3:close(Db).
 
-% Fold related updates into one transaction
-storage_transaction(Fun,  Storage) ->
-    esqlite3_utils:transaction(Fun, Storage).
+% Folds related inserts into one transaction
+downsample_handler_transaction(Fun,  Db) ->
+    esqlite3_utils:transaction(Fun, Db).
 
-% Initialize storage for the given datapoint.
-storage_init_datapoint(Metric, DataPoint, Period, Storage) ->
-    {ok, TableName} = ensure_table(MetricName, DataPoint, Period, Storage),
+% Initialize the handler for the given datapoint.
+downsample_handler_init_datapoint(Metric, DataPoint, Period, Db) ->
+    {ok, TableName} = ensure_table(Metric, DataPoint, Period, Db),
     <<"INSERT INTO \"", TableName/binary, "\" VALUES (?, ?)">>.
 
 % One datapoint insert.
-storage_insert_datapoint(Query, Args, Storage) ->
+downsample_handler_insert_datapoint(Query, Args, Storage) ->
     esqlite3:q(Query, Args, Storage).
 
 %%
@@ -54,6 +63,14 @@ create_table(TableName, Db) ->
     ColumnDefs = <<"time double PRIMARY KEY NOT NULL, value double NOT NULL">>,
     [] = esqlite3:q(<<"CREATE TABLE \"", TableName/binary, "\"(", ColumnDefs/binary, ")">>, Db),
     ok.
+
+%%
+%% Extra Api
+%%
+
+get_history(Metric, DataPoint, Period, Db) ->
+    TableName = table_name(Metric, DataPoint, Period),
+    [ [{time, z_convert:to_integer(T)}, {value, V}] || {T, V} <- esqlite3:q(<<"SELECT time, value FROM\"", TableName/binary, "\" ORDER BY time DESC LIMIT 600">>, Db)].
 
 %%
 %% Tests

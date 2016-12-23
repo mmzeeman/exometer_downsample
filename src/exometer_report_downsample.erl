@@ -2,7 +2,7 @@
 %%
 %%
 
--module(exometer_report_sqlite).
+-module(exometer_report_downsample).
 
 -behaviour(exometer_report).
 
@@ -28,11 +28,9 @@
 -include_lib("exometer_core/include/exometer.hrl").
 
 -record(state, {
-    db_arg,
-    db,
-
-    storage_handler,
-    storage
+    handler,
+    handler_args,
+    handler_state, 
 
     samplers 
 }).
@@ -49,37 +47,32 @@ exometer_init(Opts) ->
     % We only support report bulk
     {report_bulk, true} = proplists:lookup(report_bulk, Opts),
 
-    % Storage handler
-    {storage_handler, Handler} = proplists:lookup(storage_handler, Opts),
-    {storage_handler_args, HandlerArgs} = proplists:lookup(storage_handler_args, Opts),
-
-   % Initialize the storage
-    {ok, Storage} = Handler:storage_init(HandlerArgs),
+    % Initialize the handler
+    {handler, Handler} = proplists:lookup(handler, Opts),
+    {handler_args, HandlerArgs} = proplists:lookup(handler_args, Opts),
+    {ok, HandlerState} = Handler:downsample_handler_init(HandlerArgs),
 
     % Samplers.
     Samplers = dict:new(),
 
-    {ok, #state{storage = Storage, storage_handler=Handler, storage_handler_args=HandlerArgs, samplers = Samplers}}.
+    {ok, #state{handler_state = HandlerState, handler=Handler, handler_args=HandlerArgs, samplers = Samplers}}.
 
 -spec exometer_report(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), value(), state()) -> callback_result().
 exometer_report(_Metric, _DataPoint, _Extra, _Value, State) ->
     lager:warning("~p: Use {report_bulk, true}.", [?MODULE]),
     {ok, State}.
 
-exometer_report_bulk(Found, _Extra,  #state{storage=Storage, storage_handler=Handler}=State) ->
+exometer_report_bulk(Found, _Extra,  #state{handler_state = HandlerState, handler=Handler}=State) ->
     Transaction = fun(Stg) ->
-        InsertDb = fun(Query, Args) -> 
-            Handler:storage_insert_datapoint(Query, Args, Stg), 
-        end,
+        Fun = fun(Query, Args) -> Handler:downsample_handler_insert_datapoint(Query, Args, Stg) end,
 
         lists:foldl(fun({Metric, Values}, #state{samplers =Samplers}=S) -> 
-            Samplers1 = dict:update(Metric, fun(Store) -> report_bucket:insert(Store, Values, InsertDb) end, Samplers),
+            Samplers1 = dict:update(Metric, fun(Store) -> downsample_bucket:insert(Store, Values, Fun) end, Samplers),
             S#state{samplers=Samplers1}
         end, State, Found)
     end,
 
-    %% New
-    State1 = case Handler:storage_transaction(Transaction, Storage) of
+    State1 = case Handler:downsample_handler_transaction(Transaction, HandlerState) of
         {rollback, _}=R -> throw(R);
         S -> S
     end,
@@ -87,8 +80,8 @@ exometer_report_bulk(Found, _Extra,  #state{storage=Storage, storage_handler=Han
     {ok, State1}.
 
 -spec exometer_subscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:interval(), exometer_report:extra(), state()) -> callback_result().
-exometer_subscribe(Metric, DataPoint, _Interval, _SubscribeOpts,  #state{storage=Storage, storage_hander=Handler, samplers=Samplers}=State) ->
-    Store = report_bucket:init_metric_store(Metric, DataPoint, Handler, Storage),
+exometer_subscribe(Metric, DataPoint, _Interval, _SubscribeOpts,  #state{handler_state = HandlerState, handler=Handler, samplers=Samplers}=State) ->
+    Store = downsample_bucket:init_metric_store(Metric, DataPoint, Handler, HandlerState),
     {ok, State#state{samplers=dict:store(Metric, Store, Samplers)}}.
 
 -spec exometer_unsubscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), state()) -> callback_result().
@@ -117,13 +110,13 @@ exometer_setopts(_Metric, _Options, _Status, State) ->
     {ok, State}.
 
 -spec exometer_terminate(any(), state()) -> any().
-exometer_terminate(Reason, #state{db=Db, storage=Storage, storage_hander=Handler}) ->
+exometer_terminate(Reason, #state{handler=Handler, handler_state=HandlerState}) ->
     lager:info("~p(~p): Terminating", [?MODULE, Reason]),
-    ok = Handler:storage_close(Storage).
+    ok = Handler:downsample_handler_close(HandlerState).
 
 
 %%
-%% Extra API
+%% Extra API, TODO, move
 %%
 
 -spec get_history(exometer:metric(), exometer_report:datapoint(), any())  -> list().
