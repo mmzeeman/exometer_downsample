@@ -9,7 +9,8 @@
     downsample_handler_close/1,
     downsample_handler_transaction/2,
     downsample_handler_init_datapoint/4,
-    downsample_handler_insert_datapoint/3
+    downsample_handler_insert_datapoint/3,
+    downsample_handler_get_history/4
 ]).
 
 -export([
@@ -24,8 +25,7 @@
 
 % Initialize the handler 
 downsample_handler_init([DbArg]) ->
-    io:fwrite(standard_error, "init: ~p~n", [DbArg]),
-    {ok, Db} = esqlite3:open(DbArg).
+    {ok, _Db} = esqlite3:open(DbArg).
 
 % Close the handler 
 downsample_handler_close(Db) ->
@@ -44,8 +44,11 @@ downsample_handler_init_datapoint(Metric, DataPoint, Period, Db) ->
 downsample_handler_insert_datapoint(Query, Args, Storage) ->
     esqlite3:q(Query, Args, Storage).
 
-downsample_handler_get_history(Metric, DataPoint, Periods) ->
-
+% History
+downsample_handler_get_history([DbArg], Metric, DataPoint, Periods) ->
+    {ok, Db} = esqlite3:open(DbArg),
+    get_history(Metric, DataPoint, Periods, Db),
+    esqlite:close(Db).
 
 %%
 %% Helpers
@@ -71,23 +74,22 @@ create_table(TableName, Db) ->
 %% Extra Api
 %%
 
-get_history(Metric, DataPoint, Period, Db) ->
-    TableName = table_name(Metric, DataPoint, Period),
-    [ [{time, z_convert:to_integer(T)}, {value, V}] || {T, V} <- esqlite3:q(<<"SELECT time, value FROM\"", TableName/binary, "\" ORDER BY time DESC LIMIT 600">>, Db)].
-
-get_history(Metric, DataPoint, Db) when is_atom(DataPoint) -> get_history(Metric, [DataPoint], Db);
-get_history(Metric, DataPoint, Db) ->
+get_history(Metric, DataPoint, Periods, Db) ->
     F = fun(TDb) -> 
-        get_history(Metric, DataPoint, [hour, day], TDb, []) 
+        get_history(Metric, DataPoint, Periods, TDb, []) 
     end,
     esqlite3_utils:transaction(F, Db).
 
 % @doc Get the historic values of a datapoint
 get_history(_Metric, [], _Periods, _Db, Acc) -> lists:reverse(Acc);
 get_history(Metric, [Point|Rest], Periods, Db, Acc) ->
-    DataPoints = [sqlite_report_bucket:get_history(Metric, Point, Period, Db) || Period <- Periods],
+    DataPoints = [get_datapoint_history(Metric, Point, Period, Db) || Period <- Periods],
     Stats = lists:zip(Periods, DataPoints),
     get_history(Metric, Rest, Periods, Db, [{{Metric, Point}, Stats} | Acc]).
+
+get_datapoint_history(Metric, DataPoint, Period, Db) ->
+    TableName = table_name(Metric, DataPoint, Period),
+    [ [{time, z_convert:to_integer(T)}, {value, V}] || {T, V} <- esqlite3:q(<<"SELECT time, value FROM\"", TableName/binary, "\" ORDER BY time DESC LIMIT 600">>, Db)].
 
 %%
 %% Tests
