@@ -7,8 +7,8 @@
 -define(NO_SAMPLES, 600).
 
 -export([
-    init_metric_store/4,
-    init_metric_store/5,
+    init_buckets/4,
+    init_buckets/5,
 
     insert/3
 ]).
@@ -25,12 +25,12 @@
 
 
 % @doc Initializes the history tables needed to store the samples.
-init_metric_store(Name, DataPoint, Handler, HandlerState) when is_atom(DataPoint) ->
-    init_metric_store(Name, [DataPoint], Handler, HandlerState);
-init_metric_store(Name, DataPoints, Handler, HandlerState) ->
-    init_metric_store(Name, DataPoints, [hour, day], Handler, HandlerState).
+init_buckets(Name, DataPoint, Handler, HandlerState) when is_atom(DataPoint) ->
+    init_buckets(Name, [DataPoint], Handler, HandlerState);
+init_buckets(Name, DataPoints, Handler, HandlerState) ->
+    init_buckets(Name, DataPoints, [hour, day], Handler, HandlerState).
 
-init_metric_store(Metric, DataPoints, Periods, Handler,  HandlerState) ->
+init_buckets(Metric, DataPoints, Periods, Handler,  HandlerState) ->
     F = fun(Stg) ->
         [{DP, init_dp_store(Metric, DP, Periods, Handler, Stg)}  || DP <- DataPoints]
     end,
@@ -126,7 +126,8 @@ init_metric_store_test() ->
     Handler = downsample_handler_test,
     {ok, HandlerState} = Handler:downsample_handler_init([]),
 
-    Bucket = init_metric_store([a,b], [min, max], Handler, HandlerState),
+    {store, _Buckets} = init_buckets([a,b], [min, max], Handler, HandlerState),
+
     ok.
 
 -endif.

@@ -24,8 +24,8 @@
 
 % Initialize the handler 
 downsample_handler_init([DbArg]) ->
-    {ok, Db} = esqlite3:open(DbArg),
-    Db.
+    io:fwrite(standard_error, "init: ~p~n", [DbArg]),
+    {ok, Db} = esqlite3:open(DbArg).
 
 % Close the handler 
 downsample_handler_close(Db) ->
@@ -43,6 +43,9 @@ downsample_handler_init_datapoint(Metric, DataPoint, Period, Db) ->
 % One datapoint insert.
 downsample_handler_insert_datapoint(Query, Args, Storage) ->
     esqlite3:q(Query, Args, Storage).
+
+downsample_handler_get_history(Metric, DataPoint, Periods) ->
+
 
 %%
 %% Helpers
@@ -72,6 +75,20 @@ get_history(Metric, DataPoint, Period, Db) ->
     TableName = table_name(Metric, DataPoint, Period),
     [ [{time, z_convert:to_integer(T)}, {value, V}] || {T, V} <- esqlite3:q(<<"SELECT time, value FROM\"", TableName/binary, "\" ORDER BY time DESC LIMIT 600">>, Db)].
 
+get_history(Metric, DataPoint, Db) when is_atom(DataPoint) -> get_history(Metric, [DataPoint], Db);
+get_history(Metric, DataPoint, Db) ->
+    F = fun(TDb) -> 
+        get_history(Metric, DataPoint, [hour, day], TDb, []) 
+    end,
+    esqlite3_utils:transaction(F, Db).
+
+% @doc Get the historic values of a datapoint
+get_history(_Metric, [], _Periods, _Db, Acc) -> lists:reverse(Acc);
+get_history(Metric, [Point|Rest], Periods, Db, Acc) ->
+    DataPoints = [sqlite_report_bucket:get_history(Metric, Point, Period, Db) || Period <- Periods],
+    Stats = lists:zip(Periods, DataPoints),
+    get_history(Metric, Rest, Periods, Db, [{{Metric, Point}, Stats} | Acc]).
+
 %%
 %% Tests
 %%
@@ -79,9 +96,10 @@ get_history(Metric, DataPoint, Period, Db) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-%%init_metric_store_test() ->
-%%    {ok, Db} = esqlite3:open("metric-store.db"),
-%%   Bucket = init_metric_store([a,b], [min, max], Db),
-%%  ok
+init_metric_store_test() ->
+   {ok, Db} = esqlite3:open(":memory:"),
+   Query = downsample_handler_init_datapoint([a,b], [min, max], hour, Db),
+   ?assertEqual(<<"INSERT INTO \"{[a,b],[min,max],hour}\" VALUES (?, ?)">>, Query),
+   ok.
 
 -endif.

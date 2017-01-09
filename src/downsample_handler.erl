@@ -38,3 +38,10 @@
 
 %%
 -callback(downsample_handler_transaction(transaction_fun(), handler_state()) -> transaction_result()).
+
+%%
+-callback(downsample_handler_get_history(
+    options(),
+    exometer_report:metric(),
+    exometer_report:datapoint(),
+    list(downsample:period())) -> any()).

@@ -22,7 +22,8 @@
 ]).
 
 -export([
-    get_history/2, get_history/3
+    get_history/2, 
+    get_history/3
 ]).
 
 -include_lib("exometer_core/include/exometer.hrl").
@@ -81,7 +82,7 @@ exometer_report_bulk(Found, _Extra,  #state{handler_state = HandlerState, handle
 
 -spec exometer_subscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:interval(), exometer_report:extra(), state()) -> callback_result().
 exometer_subscribe(Metric, DataPoint, _Interval, _SubscribeOpts,  #state{handler_state = HandlerState, handler=Handler, samplers=Samplers}=State) ->
-    Store = downsample_bucket:init_metric_store(Metric, DataPoint, Handler, HandlerState),
+    Store = downsample_bucket:init_buckets(Metric, DataPoint, Handler, HandlerState),
     {ok, State#state{samplers=dict:store(Metric, Store, Samplers)}}.
 
 -spec exometer_unsubscribe(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), state()) -> callback_result().
@@ -90,6 +91,8 @@ exometer_unsubscribe(Metric, _DataPoint, _Extra, #state{samplers=Samplers}=State
     {ok, State#state{samplers=dict:erase(Metric, Samplers)}}.
 
 -spec exometer_call(any(), pid(), state()) -> {reply, any(), state()} | {noreply, state()} | any().
+exometer_call({history, _Metric, _DataPoint}, _From, #state{handler=Handler, handler_args = Args}=State) ->
+    {reply, {ok, Handler, Args}, State};
 exometer_call(_Unknown, _From, State) ->
     {ok, State}.
 
@@ -111,31 +114,18 @@ exometer_setopts(_Metric, _Options, _Status, State) ->
 
 -spec exometer_terminate(any(), state()) -> any().
 exometer_terminate(Reason, #state{handler=Handler, handler_state=HandlerState}) ->
+    io:fwrite(standard_error, "Terminating: ~p~n", [Reason]),
     lager:info("~p(~p): Terminating", [?MODULE, Reason]),
     ok = Handler:downsample_handler_close(HandlerState).
 
-
 %%
-%% Extra API, TODO, move
+%% Extra API
 %%
 
--spec get_history(exometer:metric(), exometer_report:datapoint(), any())  -> list().
+-spec get_history(exometer:metric(), exometer_report:datapoint())  -> list().
 get_history(Metric, DataPoint) ->
-    %% TODO: fix hard code db name. 
-    {ok, Conn} = esqlite3:open("priv/log/metrics.db"),
-    Result = get_history(Metric, DataPoint, Conn),
-    esqlite3:close(Conn),
-    Result.
+    get_history(Metric, DataPoint, [hour, day]).
 
-get_history(Metric, DataPoint, Db) when is_atom(DataPoint) -> get_history(Metric, [DataPoint], Db);
-get_history(Metric, DataPoint, Db) ->
-    F = fun(TDb) -> get_history(Metric, DataPoint, [hour, day], TDb, []) end,
-    esqlite3_utils:transaction(F, Db).
-
-% @doc Get the historic values of a datapoint
-get_history(_Metric, [], _Periods, _Db, Acc) -> lists:reverse(Acc);
-get_history(Metric, [Point|Rest], Periods, Db, Acc) ->
-    DataPoints = [sqlite_report_bucket:get_history(Metric, Point, Period, Db) || Period <- Periods],
-    Stats = lists:zip(Periods, DataPoints),
-    get_history(Metric, Rest, Periods, Db, [{{Metric, Point}, Stats} | Acc]).
-   
+get_history(Metric, DataPoint, Periods) ->
+    {ok, Handler, HandlerArgs} = exometer_report:call_reporter(?MODULE, {history, Metric, DataPoint}),
+    Handler:get_history(HandlerArgs, Metric, DataPoint, Periods).
