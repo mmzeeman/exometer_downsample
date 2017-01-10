@@ -45,3 +45,6 @@
     exometer_report:metric(),
     exometer_report:datapoint(),
     list(downsample:period())) -> any()).
+
+%%
+-callback(downsample_handler_purge(options(), handler_state()) -> ok).

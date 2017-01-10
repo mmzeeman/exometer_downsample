@@ -28,6 +28,8 @@
 
 -include_lib("exometer_core/include/exometer.hrl").
 
+-define(PURGE_INTERVAL, timer:minutes(30)).
+
 -record(state, {
     handler,
     handler_args,
@@ -55,6 +57,8 @@ exometer_init(Opts) ->
 
     % Samplers.
     Samplers = dict:new(),
+
+    trigger_purge(0),
 
     {ok, #state{handler_state = HandlerState, handler=Handler, handler_args=HandlerArgs, samplers = Samplers}}.
 
@@ -101,6 +105,11 @@ exometer_cast(_Unknown, State) ->
     {ok, State}.
 
 -spec exometer_info(any(), state()) -> callback_result().
+exometer_info(purge, #state{handler=Handler, handler_args=HandlerArgs, handler_state=HandlerState}=State) ->
+    io:fwrite(standard_error, "Purging~n", []),
+    Handler:downsample_handler_purge(HandlerArgs, HandlerState),
+    trigger_purge(?PURGE_INTERVAL),
+    {ok, State};
 exometer_info(_Unknown, State) ->
     {ok, State}.
 
@@ -129,3 +138,10 @@ get_history(Metric, DataPoint) ->
 get_history(Metric, DataPoint, Periods) ->
     {ok, Handler, HandlerArgs} = exometer_report:call_reporter(?MODULE, {history, Metric, DataPoint}),
     Handler:get_history(HandlerArgs, Metric, DataPoint, Periods).
+
+%%
+%% Helpers
+%%
+
+trigger_purge(Time) ->
+    erlang:send_after(Time, self(), purge).

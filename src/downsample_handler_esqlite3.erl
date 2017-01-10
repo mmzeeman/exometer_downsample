@@ -10,7 +10,8 @@
     downsample_handler_transaction/2,
     downsample_handler_init_datapoint/4,
     downsample_handler_insert_datapoint/3,
-    downsample_handler_get_history/4
+    downsample_handler_get_history/4,
+    downsample_handler_purge/2
 ]).
 
 -export([
@@ -25,7 +26,9 @@
 
 % Initialize the handler 
 downsample_handler_init([DbArg]) ->
-    {ok, _Db} = esqlite3:open(DbArg).
+    {ok, Db} = esqlite3:open(DbArg),
+    ok = ensure_admin_table(Db),
+    {ok, Db}.
 
 % Close the handler 
 downsample_handler_close(Db) ->
@@ -44,15 +47,29 @@ downsample_handler_init_datapoint(Metric, DataPoint, Period, Db) ->
 downsample_handler_insert_datapoint(Query, Args, Storage) ->
     esqlite3:q(Query, Args, Storage).
 
-% History
+% Get historic data. 
 downsample_handler_get_history([DbArg], Metric, DataPoint, Periods) ->
     {ok, Db} = esqlite3:open(DbArg),
     get_history(Metric, DataPoint, Periods, Db),
     esqlite:close(Db).
 
+% Purge tables with historic data. Will be called periodically.
+downsample_handler_purge([_DbArg], Db) ->
+    PurgeFun = fun(TDb) ->
+        Tables = esqlite3:q(<<"SELECT name FROM datapoint">>, [], TDb),
+        io:fwrite(standard_error, "purge: ~p~n", [Tables]),
+        [delete_oldest(T, TDb) || T <- Tables]
+    end,
+    esqlite3_utils:transaction(PurgeFun, Db).
+
 %%
 %% Helpers
 %%
+
+delete_oldest(TableName, Db) ->
+    Q = <<"DELETE FROM \"",  TableName/binary, "\" WHERE time IN (SELECT time FROM \"",  TableName/binary, "\" ORDER BY time DESC LIMIT -1 OFFSET 600)">>,
+    esqlite3:q(Q, [], Db).
+
 
 ensure_table(Name, DataPoint, Period, Db) ->
     TableName = table_name(Name, DataPoint, Period), 
@@ -60,6 +77,7 @@ ensure_table(Name, DataPoint, Period, Db) ->
         false -> create_table(TableName, Db);
         true -> ok
     end,
+    ensure_in_admin(TableName, Db),
     {ok, TableName}.
 
 table_name(Metric, DataPoint, Period) ->
@@ -69,6 +87,26 @@ create_table(TableName, Db) ->
     ColumnDefs = <<"time double PRIMARY KEY NOT NULL, value double NOT NULL">>,
     [] = esqlite3:q(<<"CREATE TABLE \"", TableName/binary, "\"(", ColumnDefs/binary, ")">>, Db),
     ok.
+
+ensure_admin_table(Db) ->
+    case esqlite3_utils:table_exists(datapoint, Db) of
+        false -> create_admin_table(Db);
+        true -> ok
+    end.
+
+ensure_in_admin(TableName, Db) ->
+    case esqlite3:q(<<"SELECT count(*) FROM datapoint WHERE name = ?">>, [TableName], Db) of
+        [{0}] ->
+            esqlite3:q(<<"INSERT INTO datapoint (name) VALUES (?)">>, [TableName], Db),
+            ok;
+        [{1}] ->
+            ok
+    end.
+
+create_admin_table(Db) ->
+    [] = esqlite3:q(<<"CREATE TABLE datapoint (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)">>, Db),
+    ok.
+
 
 %%
 %% Extra Api
@@ -99,7 +137,7 @@ get_datapoint_history(Metric, DataPoint, Period, Db) ->
 -include_lib("eunit/include/eunit.hrl").
 
 init_metric_store_test() ->
-   {ok, Db} = esqlite3:open(":memory:"),
+   {ok, Db} = downsample_handler_init([":memory:"]),
    Query = downsample_handler_init_datapoint([a,b], [min, max], hour, Db),
    ?assertEqual(<<"INSERT INTO \"{[a,b],[min,max],hour}\" VALUES (?, ?)">>, Query),
    ok.
