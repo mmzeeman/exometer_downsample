@@ -50,8 +50,9 @@ downsample_handler_insert_datapoint(Query, Args, Storage) ->
 % Get historic data. 
 downsample_handler_get_history([DbArg], Metric, DataPoint, Periods) ->
     {ok, Db} = esqlite3:open(DbArg),
-    get_history(Metric, DataPoint, Periods, Db),
-    esqlite:close(Db).
+    History = get_history(Metric, DataPoint, Periods, Db),
+    esqlite3:close(Db),
+    History.
 
 % Purge tables with historic data. Will be called periodically.
 downsample_handler_purge([_DbArg], Db) ->

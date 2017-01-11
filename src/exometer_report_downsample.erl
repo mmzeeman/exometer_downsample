@@ -69,10 +69,13 @@ exometer_report(_Metric, _DataPoint, _Extra, _Value, State) ->
 
 exometer_report_bulk(Found, _Extra,  #state{handler_state = HandlerState, handler=Handler}=State) ->
     Transaction = fun(Stg) ->
-        Fun = fun(Query, Args) -> Handler:downsample_handler_insert_datapoint(Query, Args, Stg) end,
+        Fun = fun(Query, Args) -> 
+            Handler:downsample_handler_insert_datapoint(Query, Args, Stg)
+        end,
 
         lists:foldl(fun({Metric, Values}, #state{samplers =Samplers}=S) -> 
-            Samplers1 = dict:update(Metric, fun(Store) -> downsample_bucket:insert(Store, Values, Fun) end, Samplers),
+            InsertFun =  fun(Store) -> downsample_bucket:insert(Store, Values, Fun) end,
+            Samplers1 = dict:update(Metric, InsertFun, Samplers),
             S#state{samplers=Samplers1}
         end, State, Found)
     end,
@@ -106,7 +109,6 @@ exometer_cast(_Unknown, State) ->
 
 -spec exometer_info(any(), state()) -> callback_result().
 exometer_info(purge, #state{handler=Handler, handler_args=HandlerArgs, handler_state=HandlerState}=State) ->
-    io:fwrite(standard_error, "Purging~n", []),
     Handler:downsample_handler_purge(HandlerArgs, HandlerState),
     trigger_purge(?PURGE_INTERVAL),
     {ok, State};
@@ -123,7 +125,6 @@ exometer_setopts(_Metric, _Options, _Status, State) ->
 
 -spec exometer_terminate(any(), state()) -> any().
 exometer_terminate(Reason, #state{handler=Handler, handler_state=HandlerState}) ->
-    io:fwrite(standard_error, "Terminating: ~p~n", [Reason]),
     lager:info("~p(~p): Terminating", [?MODULE, Reason]),
     ok = Handler:downsample_handler_close(HandlerState).
 
@@ -137,7 +138,7 @@ get_history(Metric, DataPoint) ->
 
 get_history(Metric, DataPoint, Periods) ->
     {ok, Handler, HandlerArgs} = exometer_report:call_reporter(?MODULE, {history, Metric, DataPoint}),
-    Handler:get_history(HandlerArgs, Metric, DataPoint, Periods).
+    Handler:downsample_handler_get_history(HandlerArgs, Metric, DataPoint, Periods).
 
 %%
 %% Helpers
