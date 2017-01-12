@@ -45,8 +45,6 @@
 
 -spec exometer_init(options()) -> callback_result().
 exometer_init(Opts) ->
-    lager:info("~p(~p): Starting", [?MODULE, Opts]),
-
     % We only support report bulk
     {report_bulk, true} = proplists:lookup(report_bulk, Opts),
 
@@ -64,7 +62,6 @@ exometer_init(Opts) ->
 
 -spec exometer_report(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), value(), state()) -> callback_result().
 exometer_report(_Metric, _DataPoint, _Extra, _Value, State) ->
-    lager:warning("~p: Use {report_bulk, true}.", [?MODULE]),
     {ok, State}.
 
 exometer_report_bulk(Found, _Extra,  #state{handler_state = HandlerState, handler=Handler}=State) ->
@@ -124,8 +121,7 @@ exometer_setopts(_Metric, _Options, _Status, State) ->
     {ok, State}.
 
 -spec exometer_terminate(any(), state()) -> any().
-exometer_terminate(Reason, #state{handler=Handler, handler_state=HandlerState}) ->
-    lager:info("~p(~p): Terminating", [?MODULE, Reason]),
+exometer_terminate(_Reason, #state{handler=Handler, handler_state=HandlerState}) ->
     ok = Handler:downsample_handler_close(HandlerState).
 
 %%
