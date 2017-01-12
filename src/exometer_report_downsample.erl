@@ -66,8 +66,9 @@ exometer_report(_Metric, _DataPoint, _Extra, _Value, State) ->
 
 exometer_report_bulk(Found, _Extra,  #state{handler_state = HandlerState, handler=Handler}=State) ->
     Transaction = fun(Stg) ->
-        Fun = fun(Query, Args) -> 
-            Handler:downsample_handler_insert_datapoint(Query, Args, Stg)
+        Fun = fun(Metric, DataPoint, Period, Point, Query) -> 
+            io:fwrite(standard_error, "~p,~p,~p,~p~n", [Metric, DataPoint, Period, Point]),
+            Handler:downsample_handler_insert_datapoint(Query, Point, Stg)
         end,
 
         lists:foldl(fun({Metric, Values}, #state{samplers =Samplers}=S) -> 

@@ -28,7 +28,6 @@
     sampler
 }).
 
-
 % @doc Initializes the history tables needed to store the samples.
 init_buckets(Name, DataPoint, Handler, HandlerState) when is_atom(DataPoint) ->
     init_buckets(Name, [DataPoint], Handler, HandlerState);
@@ -37,7 +36,7 @@ init_buckets(Name, DataPoints, Handler, HandlerState) ->
 
 init_buckets(Metric, DataPoints, Periods, Handler,  HandlerState) ->
     F = fun(Stg) ->
-        [{DP, init_dp_store(Metric, DP, Periods, Handler, Stg)}  || DP <- DataPoints]
+        [init_dp_store(Metric, DP, Periods, Handler, Stg)  || DP <- DataPoints]
     end,
     DpStores = Handler:downsample_handler_transaction(F, HandlerState),
     #store{metric = Metric, stores = DpStores}.
@@ -55,33 +54,32 @@ init_sampler(hour, Table) ->
 init_sampler(day, Table) ->
     largest_triangle_three_buckets:downsample_stream(24, Table).
 
-
 % @doc Insert a new sample in the store.
 %
-insert(#store{stores = Stores}=MS, Values, InsertDb) ->
+insert(#store{metric = Metric, stores = Stores}=MS, Values, InsertDb) ->
     Now = unix_time(),
-    Stores1 = [ {Dp, insert_value(Store, Now, proplists:get_value(Dp, Values), InsertDb)} || {Dp, Store} <- Stores],
+    Stores1 = [insert_value(Metric, Store, Now, proplists:get_value(Store#datapoint_store.datapoint, Values), InsertDb) || Store <- Stores],
     MS#store{stores = Stores1}.
 
-insert_value(Store, _Now, undefined, _InsertDb) -> Store;
-insert_value(#datapoint_store{samplers = Samplers}=Store, Now, Value, InsertDb) ->
-    Samplers1 = insert_sample(InsertDb, Samplers, {Now, Value}, false, []),
+insert_value(_Metric, Store, _Now, undefined, _InsertDb) -> Store;
+insert_value(Metric, #datapoint_store{datapoint = DataPoint, samplers = Samplers}=Store, Now, Value, InsertDb) ->
+    Samplers1 = insert_sample(InsertDb, Metric, DataPoint, Samplers, {Now, Value}, false, []),
     Store#datapoint_store{samplers=Samplers1}.
 
-insert_sample(_InsertDb, [], _Point, _Ready, Acc) -> 
+insert_sample(_InsertDb, _Metric, _DataPoint, [], _Point, _Ready, Acc) -> 
     lists:reverse(Acc);
-insert_sample(InsertDb, [H|T], _Point, true, Acc) -> 
-    insert_sample(InsertDb, T, _Point, true, [H|Acc]);
-insert_sample(InsertDb, [#period_sampler{sampler=H}=PeriodSampler|T], Point, false, Acc) ->
+insert_sample(InsertDb, Metric, DataPoint, [H|T], _Point, true, Acc) -> 
+    insert_sample(InsertDb, Metric, DataPoint, T, _Point, true, [H|Acc]);
+insert_sample(InsertDb, Metric, DataPoint, [#period_sampler{period=Period, sampler=H}=PeriodSampler|T], Point, false, Acc) ->
     case largest_triangle_three_buckets:add(Point, H) of
         {continue, H1} -> 
             %% Done
             PeriodSampler1 = PeriodSampler#period_sampler{sampler=H1},
-            insert_sample(InsertDb, T, Point, true, [PeriodSampler1|Acc]);
+            insert_sample(InsertDb, Metric, DataPoint, T, Point, true, [PeriodSampler1|Acc]);
         {ok, {Ts, V}=P, H1} ->
-            InsertDb(largest_triangle_three_buckets:state(H1), [Ts, V]),
+            InsertDb(Metric, DataPoint, Period, [Ts, V], largest_triangle_three_buckets:state(H1)),
             PeriodSampler1 = PeriodSampler#period_sampler{sampler=H1},
-            insert_sample(InsertDb, T, P, false, [PeriodSampler1|Acc])
+            insert_sample(InsertDb, Metric, DataPoint, T, P, false, [PeriodSampler1|Acc])
     end.
 
 %%
