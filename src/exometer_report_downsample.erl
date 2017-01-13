@@ -35,6 +35,8 @@
     handler_args,
     handler_state, 
 
+    reporter,
+
     samplers 
 }).
 
@@ -48,27 +50,30 @@ exometer_init(Opts) ->
     % We only support report bulk
     {report_bulk, true} = proplists:lookup(report_bulk, Opts),
 
-    % Initialize the handler
+    % Initialize the storage handler
     {handler, Handler} = proplists:lookup(handler, Opts),
     {handler_args, HandlerArgs} = proplists:lookup(handler_args, Opts),
     {ok, HandlerState} = Handler:downsample_handler_init(HandlerArgs),
+
+    % Reporting 
+    Reporter = proplists:get_value(reporter, Opts),
 
     % Samplers.
     Samplers = dict:new(),
 
     trigger_purge(0),
 
-    {ok, #state{handler_state = HandlerState, handler=Handler, handler_args=HandlerArgs, samplers = Samplers}}.
+    {ok, #state{handler = Handler, handler_state = HandlerState, handler_args=HandlerArgs, reporter = Reporter, samplers = Samplers}}.
 
 -spec exometer_report(exometer_report:metric(), exometer_report:datapoint(), exometer_report:extra(), value(), state()) -> callback_result().
 exometer_report(_Metric, _DataPoint, _Extra, _Value, State) ->
     {ok, State}.
 
-exometer_report_bulk(Found, _Extra,  #state{handler_state = HandlerState, handler=Handler}=State) ->
+exometer_report_bulk(Found, _Extra,  #state{handler_state = HandlerState, handler=Handler, reporter = Reporter}=State) ->
     Transaction = fun(Stg) ->
-        Fun = fun(Metric, DataPoint, Period, Point, Query) -> 
-            io:fwrite(standard_error, "~p,~p,~p,~p~n", [Metric, DataPoint, Period, Point]),
-            Handler:downsample_handler_insert_datapoint(Query, Point, Stg)
+        Fun = fun(Metric, DataPoint, Period, Timestamp, Value, DpState) -> 
+            report(Reporter, Metric, DataPoint, Period, Timestamp, Value),
+            Handler:downsample_handler_insert_datapoint(Metric, DataPoint, Period, Timestamp, Value, DpState, Stg)
         end,
 
         lists:foldl(fun({Metric, Values}, #state{samplers =Samplers}=S) -> 
@@ -140,6 +145,10 @@ get_history(Metric, DataPoint, Periods) ->
 %%
 %% Helpers
 %%
+
+report(undefined, _Metric, _DataPoint, _Period, _Timestamp, _Value) -> ok;
+report({M, F}, Metric, DataPoint, Period, Timestamp, Value) ->
+    M:F(Metric, DataPoint, Period, Timestamp, Value).
 
 trigger_purge(Time) ->
     erlang:send_after(Time, self(), purge).

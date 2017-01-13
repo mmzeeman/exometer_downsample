@@ -76,8 +76,8 @@ insert_sample(InsertDb, Metric, DataPoint, [#period_sampler{period=Period, sampl
             %% Done
             PeriodSampler1 = PeriodSampler#period_sampler{sampler=H1},
             insert_sample(InsertDb, Metric, DataPoint, T, Point, true, [PeriodSampler1|Acc]);
-        {ok, {Ts, V}=P, H1} ->
-            InsertDb(Metric, DataPoint, Period, [Ts, V], largest_triangle_three_buckets:state(H1)),
+        {ok, {Timestamp, Value}=P, H1} ->
+            InsertDb(Metric, DataPoint, Period, Timestamp, Value, largest_triangle_three_buckets:state(H1)),
             PeriodSampler1 = PeriodSampler#period_sampler{sampler=H1},
             insert_sample(InsertDb, Metric, DataPoint, T, P, false, [PeriodSampler1|Acc])
     end.

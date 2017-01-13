@@ -29,10 +29,9 @@ downsample_handler_transaction(F, test_handler_state) ->
     F(test_handler_state).
 
 downsample_handler_init_datapoint(Metric, DataPoint, Period, test_handler_state) ->
-    io:fwrite(standard_error, "~p~p~p~n", [Metric, DataPoint, Period]),
     [Metric, DataPoint, Period, test_handler_state].
 
-downsample_handler_insert_datapoint(_Data, datapoint_state, test_handler_state) ->
+downsample_handler_insert_datapoint(_Metric, _Datapoint, _Period, _Timestamp, _Value, datapoint_state, test_handler_state) ->
     ok.
 
 downsample_handler_get_history([], _Metric, _DatePoint, _Periods) ->

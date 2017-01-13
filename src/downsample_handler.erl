@@ -12,6 +12,9 @@
 -type handler_state() :: any().
 -type datapoint_state() :: any().
 
+-type timestamp() :: integer().
+-type value() :: number().
+
 -type transaction_fun() :: any().
 -type transaction_result() :: any().
 
@@ -34,7 +37,14 @@
     handler_state()) -> datapoint_state()).
 
 %%
--callback(downsample_handler_insert_datapoint(any(), datapoint_state(), handler_state()) -> any()).
+-callback(downsample_handler_insert_datapoint(
+    exometer_report:metric(),
+    exometer_report:datapoint(),
+    downsample:period(),
+    timestamp(),
+    value(),
+    datapoint_state(), 
+    handler_state()) -> any()).
 
 %%
 -callback(downsample_handler_transaction(transaction_fun(), handler_state()) -> transaction_result()).

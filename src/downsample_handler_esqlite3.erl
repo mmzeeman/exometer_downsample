@@ -9,7 +9,7 @@
     downsample_handler_close/1,
     downsample_handler_transaction/2,
     downsample_handler_init_datapoint/4,
-    downsample_handler_insert_datapoint/3,
+    downsample_handler_insert_datapoint/7,
     downsample_handler_get_history/4,
     downsample_handler_purge/2
 ]).
@@ -44,8 +44,8 @@ downsample_handler_init_datapoint(Metric, DataPoint, Period, Db) ->
     <<"INSERT INTO \"", TableName/binary, "\" VALUES (?, ?)">>.
 
 % One datapoint insert.
-downsample_handler_insert_datapoint(Query, Args, Storage) ->
-    esqlite3:q(Query, Args, Storage).
+downsample_handler_insert_datapoint(_Metric, _DataPoint, _Period, Timestamp, Value, Query, Storage) ->
+    esqlite3:q(Query, [Timestamp, Value], Storage).
 
 % Get historic data. 
 downsample_handler_get_history([DbArg], Metric, DataPoint, Periods) ->
