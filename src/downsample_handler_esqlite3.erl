@@ -58,10 +58,10 @@ downsample_handler_get_history([DbArg], Metric, DataPoint, Periods) ->
 downsample_handler_purge([_DbArg], Db) ->
     PurgeFun = fun(TDb) ->
         Tables = esqlite3:q(<<"SELECT name FROM datapoint">>, [], TDb),
-        io:fwrite(standard_error, "purge: ~p~n", [Tables]),
-        [delete_oldest(T, TDb) || T <- Tables]
+        [delete_oldest(T, TDb) || {T} <- Tables],
+        ok
     end,
-    esqlite3_utils:transaction(PurgeFun, Db).
+    ok = esqlite3_utils:transaction(PurgeFun, Db).
 
 %%
 %% Helpers
@@ -69,8 +69,7 @@ downsample_handler_purge([_DbArg], Db) ->
 
 delete_oldest(TableName, Db) ->
     Q = <<"DELETE FROM \"",  TableName/binary, "\" WHERE time IN (SELECT time FROM \"",  TableName/binary, "\" ORDER BY time DESC LIMIT -1 OFFSET 600)">>,
-    esqlite3:q(Q, [], Db).
-
+    ok = esqlite3:exec(Q, Db).
 
 ensure_table(Name, DataPoint, Period, Db) ->
     TableName = table_name(Name, DataPoint, Period), 
