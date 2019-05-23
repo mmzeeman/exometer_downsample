@@ -130,7 +130,7 @@ init_metric_store_test() ->
     Handler = downsample_handler_test,
     {ok, HandlerState} = Handler:downsample_handler_init([]),
 
-    {store, _Buckets} = init_buckets([a,b], [min, max], Handler, HandlerState),
+    #store{} = init_buckets([a,b], [min, max], Handler, HandlerState),
 
     ok.
 
