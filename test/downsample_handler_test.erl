@@ -1,5 +1,5 @@
 %
-% Dummy handler to test the reportere
+% Dummy handler to test the reporter
 %
 
 -module(downsample_handler_test).
@@ -11,11 +11,10 @@
     downsample_handler_close/1,
     downsample_handler_transaction/2,
     downsample_handler_init_datapoint/4,
-    downsample_handler_insert_datapoint/3,
+    downsample_handler_insert_datapoint/7,
     downsample_handler_get_history/4,
     downsample_handler_purge/2
 ]).
-
 
 
 %%
