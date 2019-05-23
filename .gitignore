@@ -1,6 +1,8 @@
-rebar
+rebar3
+_build
 .eunit
 .rebar
 ebin
 deps
+tags
 
